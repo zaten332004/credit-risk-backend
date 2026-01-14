@@ -1,9 +1,12 @@
-<<<<<<< HEAD
 fastapi==0.128.0
 uvicorn==0.40.0
 pydantic==2.12.5
 pydantic-settings==2.12.0
 python-dotenv==1.2.1
+
+# Auth / security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
 
 # Data / ML (basic credit-risk scoring demo)
 numpy==2.4.1
@@ -16,22 +19,3 @@ boto3==1.42.27
 # Testing
 pytest==8.4.2
 httpx==0.28.1
-=======
-fastapi==0.128.0
-uvicorn==0.40.0
-pydantic==2.12.5
-pydantic-settings==2.12.0
-python-dotenv==1.2.1
-
-# Data / ML (basic credit-risk scoring demo)
-numpy==2.4.1
-pandas==2.3.3
-scikit-learn==1.8.0
-
-# AWS (for future integration)
-boto3==1.42.27
-
-# Testing
-pytest==8.4.2
-httpx==0.28.1
->>>>>>> 347028a67f37df24c1e1c667520f1378d672db4f
