@@ -41,6 +41,7 @@ from app.schemas.schemas import (
     RiskModelVersion,
     RiskRequest,
     RiskResponse,
+    RiskScoreDetail,
     RiskSimulationBody,
     RiskSimulationResult,
     RiskDistributionResponse,
@@ -299,6 +300,16 @@ async def portfolio_compare_endpoint(
 # ---------------------------------------------------------------------------
 # Group 4: Chatbot & Interactive Query
 # ---------------------------------------------------------------------------
+
+
+@router.post("/chat", response_model=ChatResponse, tags=["chat"])
+async def chat_legacy_endpoint(body: ChatRequest) -> ChatResponse:
+    """
+    Endpoint giữ lại theo thiết kế ban đầu /api/v1/chat, không yêu cầu JWT,
+    dùng cho các client đơn giản (demo, test).
+    """
+    answer = services.simple_chat_reply(body.message)
+    return ChatResponse(answer=answer)
 
 
 @router.post("/chat/query", response_model=ChatResponse, tags=["chat"])

@@ -8,8 +8,9 @@ client = TestClient(app)
 
 def test_root() -> None:
     r = client.get("/")
+    # Sau khi đổi root redirect sang /docs, ta kỳ vọng nhận được trang HTML docs
     assert r.status_code == 200
-    assert "message" in r.json()
+    assert "text/html" in r.headers.get("content-type", "")
 
 
 def test_health() -> None:

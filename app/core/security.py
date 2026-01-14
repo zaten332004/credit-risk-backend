@@ -10,7 +10,8 @@ from app.schemas.schemas import TokenData, User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Dùng pbkdf2_sha256 để tránh lỗi backend bcrypt trên môi trường hiện tại
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 # Demo secret – với production nên đọc từ env / AWS Secrets Manager
 SECRET_KEY = "CHANGE_ME_TO_A_SECURE_RANDOM_SECRET"
