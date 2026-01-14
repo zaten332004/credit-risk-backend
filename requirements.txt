@@ -17,6 +17,10 @@ scikit-learn==1.8.0
 # AWS (for future integration)
 boto3==1.42.27
 
+# Database (SQL Server via SQLAlchemy + pyodbc)
+sqlalchemy==2.0.35
+pyodbc==5.2.0
+
 # Testing
 pytest==8.4.2
 httpx==0.28.1
