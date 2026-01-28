@@ -1,12 +1,13 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 
-# ---------------------------------------------------------------------------
+# ============================================================================
 # Common / Auth
-# ---------------------------------------------------------------------------
+# ============================================================================
 
 
 class HealthResponse(BaseModel):
@@ -24,68 +25,109 @@ class TokenData(BaseModel):
     sub: str | None = None
 
 
+# ============================================================================
+# Role
+# ============================================================================
+
+
+class RoleRead(BaseModel):
+    role_id: int
+    role_name: str
+    description: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================================================
+# User
+# ============================================================================
+
+
 class User(BaseModel):
     id: int
     email: str
     full_name: str | None = None
     is_active: bool = True
-    is_admin: bool = False
 
 
 class UserCreate(BaseModel):
+    username: str
     email: str
-    full_name: Optional[str] = None
     password: str
-    is_admin: bool = False
+    role_id: int
 
 
 class UserRead(BaseModel):
-    id: int
+    user_id: int
+    username: str
     email: str
-    full_name: Optional[str] = None
-    is_active: bool
-    is_admin: bool
+    role_id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
-# ---------------------------------------------------------------------------
-# Customers
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Customer & Employment
+# ============================================================================
 
 
-class CustomerBase(BaseModel):
-    name: str
+class CustomerEmploymentRead(BaseModel):
+    employment_id: int
+    customer_id: int
+    company_name: Optional[str] = None
+    position: Optional[str] = None
+    years_of_experience: Optional[int] = None
+    monthly_income: Optional[float] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CustomerCreate(BaseModel):
+    full_name: str
     age: int
-    income: float
-    credit_score: Optional[float] = None
+    monthly_income: float
+    credit_score: Optional[int] = None
+    employment_status: Optional[str] = None
 
+    @validator('age')
+    def age_valid(cls, v):
+        if v < 18 or v > 150:
+            raise ValueError('Age must be between 18 and 150')
+        return v
 
-class CustomerCreate(CustomerBase):
-    pass
+    @validator('monthly_income')
+    def income_valid(cls, v):
+        if v <= 0:
+            raise ValueError('Monthly income must be positive')
+        return v
 
 
 class CustomerUpdate(BaseModel):
-    name: Optional[str] = None
+    full_name: Optional[str] = None
     age: Optional[int] = None
-    income: Optional[float] = None
-    credit_score: Optional[float] = None
+    monthly_income: Optional[float] = None
+    credit_score: Optional[int] = None
+    employment_status: Optional[str] = None
 
 
-class CustomerRead(CustomerBase):
-    id: int
-    risk_level: Optional[str] = None
-    last_updated: datetime
+class CustomerRead(BaseModel):
+    customer_id: int
+    full_name: str
+    age: Optional[int] = None
+    monthly_income: Optional[float] = None
+    credit_score: Optional[int] = None
+    employment_status: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    employments: List[CustomerEmploymentRead] = []
 
-
-class CustomerHistoryItem(BaseModel):
-    timestamp: datetime
-    changed_by: str
-    changes: Dict[str, Any]
-
-
-class CustomerSearchBody(BaseModel):
-    filters: Dict[str, Any]
-    page: int = 1
-    limit: int = 20
+    class Config:
+        from_attributes = True
 
 
 class PaginatedCustomers(BaseModel):
@@ -95,13 +137,150 @@ class PaginatedCustomers(BaseModel):
     limit: int
 
 
-# ---------------------------------------------------------------------------
-# Risk / Scoring
-# ---------------------------------------------------------------------------
+class CustomerSearchBody(BaseModel):
+    filters: Dict[str, Any]
+    page: int = 1
+    limit: int = 20
+
+
+# ============================================================================
+# Loan Application
+# ============================================================================
+
+
+class LoanApplicationCreate(BaseModel):
+    customer_id: int
+    loan_amount: float
+    loan_term: int  # months
+    interest_rate: Optional[float] = None
+    loan_purpose: Optional[str] = None
+
+    @validator('loan_amount')
+    def loan_amount_valid(cls, v):
+        if v <= 0:
+            raise ValueError('Loan amount must be positive')
+        return v
+
+    @validator('loan_term')
+    def loan_term_valid(cls, v):
+        if v <= 0 or v > 360:
+            raise ValueError('Loan term must be between 1 and 360 months')
+        return v
+
+
+class LoanApplicationRead(BaseModel):
+    application_id: int
+    customer_id: int
+    loan_amount: float
+    loan_term: int
+    interest_rate: Optional[float] = None
+    loan_status: str
+    loan_purpose: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================================================
+# Loan Facility
+# ============================================================================
+
+
+class LoanFacilityCreate(BaseModel):
+    application_id: int
+    customer_id: int
+    facility_type: Optional[str] = None
+    approved_amount: float
+    interest_rate: Optional[float] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+
+
+class LoanFacilityRead(BaseModel):
+    facility_id: int
+    application_id: Optional[int] = None
+    customer_id: int
+    facility_type: Optional[str] = None
+    approved_amount: float
+    interest_rate: Optional[float] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    status: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================================================
+# Loan Payment & Repayment
+# ============================================================================
+
+
+class LoanRepaymentScheduleRead(BaseModel):
+    schedule_id: int
+    facility_id: int
+    installment_no: int
+    due_date: datetime
+    principal_amount: float
+    interest_amount: float
+    total_due: float
+    remaining_balance: float
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class LoanPaymentCreate(BaseModel):
+    facility_id: int
+    schedule_id: Optional[int] = None
+    payment_date: datetime
+    amount_paid: float
+    payment_method: Optional[str] = None
+
+
+class LoanPaymentRead(BaseModel):
+    payment_id: int
+    facility_id: int
+    schedule_id: Optional[int] = None
+    payment_date: datetime
+    amount_paid: float
+    principal_paid: Optional[float] = None
+    interest_paid: Optional[float] = None
+    payment_method: Optional[str] = None
+    status: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================================================
+# Loan Delinquency
+# ============================================================================
+
+
+class LoanDelinquencyRead(BaseModel):
+    delinquency_id: int
+    facility_id: int
+    as_of_date: datetime
+    days_past_due: int
+    overdue_amount: Optional[float] = None
+    risk_bucket: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================================================
+# Risk Scoring
+# ============================================================================
 
 
 class RiskRequest(BaseModel):
-    # Minimal fields for a baseline credit-risk scoring demo
     income: float = Field(..., ge=0, description="Monthly income")
     debt: float = Field(..., ge=0, description="Total monthly debt payments")
     age: int = Field(..., ge=18, le=120)
@@ -122,6 +301,19 @@ class RiskScoreDetail(BaseModel):
     risk_score: float
     confidence: float
     model_version: str
+
+
+class RiskPredictionRead(BaseModel):
+    prediction_id: int
+    application_id: Optional[int] = None
+    customer_id: Optional[int] = None
+    model_id: Optional[int] = None
+    risk_score: float
+    risk_level: Optional[str] = None
+    predicted_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 class RiskAnalyzeBody(BaseModel):
@@ -156,9 +348,9 @@ class RiskExplainResponse(BaseModel):
     feature_importance: Dict[str, float]
 
 
-# ---------------------------------------------------------------------------
+# ============================================================================
 # Portfolio
-# ---------------------------------------------------------------------------
+# ============================================================================
 
 
 class PortfolioKPIResponse(BaseModel):
@@ -202,9 +394,41 @@ class PortfolioCompareResponse(BaseModel):
     diff_metrics: Dict[str, Any]
 
 
-# ---------------------------------------------------------------------------
-# Chatbot
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Chat
+# ============================================================================
+
+
+class ChatSessionCreate(BaseModel):
+    user_id: int
+
+
+class ChatSessionRead(BaseModel):
+    session_id: UUID
+    user_id: int
+    created_at: datetime
+    last_interaction: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ChatMessageCreate(BaseModel):
+    session_id: UUID
+    user_id: int
+    message: str
+
+
+class ChatMessageRead(BaseModel):
+    chat_id: int
+    user_id: int
+    session_id: Optional[UUID] = None
+    message: str
+    bot_response: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 class ChatRequest(BaseModel):
@@ -220,9 +444,9 @@ class ChatResponse(BaseModel):
 
 
 class ChatSessionSummary(BaseModel):
-    session_id: str
+    session_id: UUID
     started_at: datetime
-    last_activity_at: datetime
+    last_activity_at: Optional[datetime] = None
 
 
 class ChatMessage(BaseModel):
@@ -231,44 +455,65 @@ class ChatMessage(BaseModel):
     timestamp: datetime
 
 
-# ---------------------------------------------------------------------------
-# Alerts
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Alert
+# ============================================================================
 
 
 class AlertRead(BaseModel):
-    id: int
-    type: str
-    status: str
-    message: str
+    alert_id: int
+    facility_id: Optional[int] = None
+    customer_id: Optional[int] = None
+    alert_type: str
+    severity: str
+    message: Optional[str] = None
+    is_resolved: bool
     created_at: datetime
+    resolved_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
 
 
 class AlertSubscriptionCreate(BaseModel):
     user_id: int
-    types: List[str]
-    threshold: float
+    alert_type: str
+    alert_severity: str
 
 
 class AlertSubscriptionRead(BaseModel):
     subscription_id: int
+    user_id: int
+    alert_type: str
+    alert_severity: str
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 class AlertResolveBody(BaseModel):
     reason: str
 
 
-# ---------------------------------------------------------------------------
+# ============================================================================
 # Admin / System
-# ---------------------------------------------------------------------------
+# ============================================================================
 
 
 class AuditLogRead(BaseModel):
-    id: int
-    user_id: Optional[int]
+    audit_id: int
+    user_id: Optional[int] = None
     action: str
-    timestamp: datetime
-    metadata: Dict[str, Any]
+    entity_type: str
+    entity_id: Optional[int] = None
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+    performed_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 class ExportRequestBody(BaseModel):
@@ -280,9 +525,9 @@ class ExportResponse(BaseModel):
     file_url: str
 
 
-# ---------------------------------------------------------------------------
+# ============================================================================
 # File / Ingestion
-# ---------------------------------------------------------------------------
+# ============================================================================
 
 
 class UploadJobResponse(BaseModel):
