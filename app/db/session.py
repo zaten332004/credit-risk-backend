@@ -3,14 +3,14 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 
 from app.core.config import settings
 
-# Ví dụ connection string cho SQL Server.
-# Bạn chỉnh lại USER, PASSWORD, SERVER, DBNAME theo môi trường thực tế.
-#
-# Format chung (pyodbc):
-#   mssql+pyodbc://USER:PASSWORD@SERVER/DBNAME?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes
+# Connection string cho SQL Server CreditRiskDB
+# Server: DESKTOP-7EPLMS3\SQLEXPRESS
+# User: sa
+# Password: 12345
+# Database: CreditRiskDB
 #
 SQLALCHEMY_DATABASE_URL = (
-    "mssql+pyodbc://sa:YourStrong!Passw0rd@localhost\\SQLEXPRESS/CreditRiskDB"
+    "mssql+pyodbc://sa:12345@DESKTOP-7EPLMS3\\SQLEXPRESS/CreditRiskDB"
     "?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes"
 )
 
