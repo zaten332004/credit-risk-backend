@@ -19,10 +19,20 @@ class HealthResponse(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    user_id: int
+    email: str
+    full_name: str | None = None
+    role: str  # admin, manager, analyst, viewer
 
 
 class TokenData(BaseModel):
     sub: str | None = None
+    role: str | None = None
+
+
+class LoginRequest(BaseModel):
+    username_or_email: str = Field(..., description="Username or email")
+    password: str = Field(..., description="Password")
 
 
 # ============================================================================
@@ -68,6 +78,57 @@ class UserRead(BaseModel):
     class Config:
         from_attributes = True
 
+
+# ============================================================================
+# User Registration
+# ============================================================================
+class UserRegistrationRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    email: str = Field(..., description="Email address")
+    password: str = Field(..., min_length=6, description="Password (min 6 chars)")
+    full_name: str | None = Field(None, max_length=100)
+    phone: str | None = Field(None, max_length=20)
+    registration_type: str = Field(..., description="'analyst' or 'manager'")
+
+
+class UserRegistrationResponse(BaseModel):
+    registration_id: int
+    username: str
+    email: str
+    registration_type: str
+    status: str  # pending, approved, rejected, verified
+    is_email_verified: bool
+    verification_token: str | None = None  # Token for email verification
+    verification_link: str | None = None  # Full URL for verification
+    created_at: datetime
+    message: str = "Registration successful. Please check your email to verify."
+
+    class Config:
+        from_attributes = True
+
+
+class UserRegistrationApprovalRequest(BaseModel):
+    registration_id: int
+    action: str = Field(..., description="'approve' or 'reject'")
+    rejection_reason: str | None = Field(None, description="Required if action is 'reject'")
+
+
+class UserRegistrationRead(BaseModel):
+    user_id: int
+    username: str
+    email: str
+    full_name: str | None = None
+    phone: str | None = None
+    user_type: str | None = None  # 'analyst' or 'manager'
+    status: str  # pending, approved, rejected
+    is_email_verified: bool
+    created_at: datetime
+    approved_by: int | None = None
+    approved_at: datetime | None = None
+    rejection_reason: str | None = None
+
+    class Config:
+        from_attributes = True
 
 # ============================================================================
 # Customer & Employment
@@ -141,6 +202,15 @@ class CustomerSearchBody(BaseModel):
     filters: Dict[str, Any]
     page: int = 1
     limit: int = 20
+
+
+class CustomerHistoryItem(BaseModel):
+    timestamp: datetime
+    changed_by: str
+    changes: Dict[str, Any]
+
+    class Config:
+        from_attributes = True
 
 
 # ============================================================================

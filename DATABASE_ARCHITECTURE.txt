@@ -1,0 +1,479 @@
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║        CREDIT RISK MANAGEMENT DATABASE ARCHITECTURE                        ║
+║                    (CreditRiskDB)                                          ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+A. KHÁCH HÀNG & THÔNG TIN CÁ NHÂN (Customer Profile)
+═══════════════════════════════════════════════════════
+
+    Customer (PK: customer_id)
+    ├─ customer_id (BIGINT, PK)
+    ├─ user_id (BIGINT, FK → User)
+    ├─ full_name (NVARCHAR(150))
+    ├─ age (INT)
+    ├─ monthly_income (NUMERIC(18,2))
+    ├─ credit_score (INT)
+    ├─ employment_status (NVARCHAR(50))
+    ├─ created_at (DATETIME2)
+    ├─ updated_at (DATETIME2)
+    └─ Relationships:
+        ├─ Customer_Employment (1:N) - Lịch sử việc làm
+        ├─ FINANCIAL_INDICATOR (1:N) - Chỉ số tài chính
+        ├─ Customer_Payment_Statistics (1:1) - Thống kê thanh toán
+        ├─ Loan_Application (1:N) - Các hồ sơ vay
+        ├─ Loan_Facility (1:N) - Các khoản vay
+        ├─ Alert (1:N) - Cảnh báo rủi ro
+        └─ RISK_PREDICTION (1:N) - Dự đoán rủi ro
+
+    Customer_Employment (PK: employment_id)
+    ├─ employment_id (BIGINT, PK)
+    ├─ customer_id (BIGINT, FK)
+    ├─ company_name (NVARCHAR(200))
+    ├─ position (NVARCHAR(100))
+    ├─ years_of_experience (INT)
+    ├─ monthly_income (NUMERIC(18,2))
+    ├─ created_at (DATETIME2)
+    └─ Purpose: Theo dõi lịch sử việc làm, chuyển công ty, tăng lương
+
+    FINANCIAL_INDICATOR (PK: indicator_id)
+    ├─ indicator_id (BIGINT, PK)
+    ├─ customer_id (BIGINT, FK)
+    ├─ dti_ratio (NUMERIC(5,2)) - Debt to Income Ratio
+    ├─ monthly_expense (NUMERIC(18,2))
+    ├─ asset_value (NUMERIC(18,2))
+    ├─ liquid_assets (NUMERIC(18,2))
+    ├─ reported_date (DATETIME2)
+    ├─ updated_at (DATETIME2)
+    └─ Purpose: Theo dõi chỉ số tài chính để đánh giá khả năng trả nợ
+
+    Customer_Payment_Statistics (PK: stats_id)
+    ├─ stats_id (BIGINT, PK)
+    ├─ customer_id (BIGINT, FK) - UNIQUE
+    ├─ total_outstanding (NUMERIC(18,2)) - Tổng dư nợ
+    ├─ total_violations (INT) - Số lần vi phạm
+    ├─ on_time_payment_rate (NUMERIC(5,2)) - Tỷ lệ trả đúng hạn (%)
+    ├─ recent_risk_upgrade (INT) - Số lần nâng cấp rủi ro (6 tháng gần)
+    ├─ recent_risk_downgrade (INT) - Số lần hạ cấp rủi ro (6 tháng gần)
+    ├─ last_updated (DATETIME2)
+    └─ Purpose: Tóm tắt nhanh thống kê khách hàng
+
+
+B. QUY TRÌNH VAY & KHOẢN VAY THỰC TẾ (Lending Process)
+═══════════════════════════════════════════════════════
+
+    Loan_Application (PK: application_id)
+    ├─ application_id (BIGINT, PK)
+    ├─ customer_id (BIGINT, FK)
+    ├─ loan_amount (NUMERIC(18,2))
+    ├─ loan_term (INT) - Số tháng
+    ├─ loan_purpose (NVARCHAR(200))
+    ├─ loan_status (NVARCHAR(50)) - pending, approved, rejected, disbursed
+    ├─ applied_at (DATETIME2)
+    ├─ created_at (DATETIME2)
+    └─ Relationships:
+        ├─ Loan_Facility (1:N) - 1 application có thể có nhiều facility
+        └─ RISK_PREDICTION (1:N) - Đánh giá rủi ro cho application
+
+    Loan_Facility (PK: facility_id)
+    ├─ facility_id (BIGINT, PK)
+    ├─ application_id (BIGINT, FK)
+    ├─ customer_id (BIGINT, FK)
+    ├─ facility_amount (NUMERIC(18,2))
+    ├─ disbursed_amount (NUMERIC(18,2))
+    ├─ interest_rate (NUMERIC(5,2))
+    ├─ facility_status (NVARCHAR(50)) - active, closed, suspended, defaulted
+    ├─ disbursed_date (DATETIME2)
+    ├─ created_at (DATETIME2)
+    └─ Relationships:
+        ├─ Loan_Repayment_Schedule (1:N) - Lịch trả nợ dự kiến
+        ├─ Loan_Payment (1:N) - Thanh toán thực tế
+        ├─ Loan_Delinquency (1:N) - Nợ quá hạn
+        ├─ Loan_Classification (1:N) - Phân loại rủi ro (Group 1-5)
+        ├─ Transaction_Log (1:N) - Lịch sử giao dịch
+        ├─ Loan_Status_Migration (1:N) - Di chuyển nhóm nợ
+        ├─ Provision_Allocation (1:N) - Dự phòng
+        └─ Alert (1:N) - Cảnh báo
+
+    Loan_Repayment_Schedule (PK: schedule_id)
+    ├─ schedule_id (BIGINT, PK)
+    ├─ facility_id (BIGINT, FK)
+    ├─ schedule_number (INT) - Kỳ thứ mấy (1, 2, 3...)
+    ├─ due_date (DATETIME2)
+    ├─ principal_due (NUMERIC(18,2))
+    ├─ interest_due (NUMERIC(18,2))
+    ├─ total_due (NUMERIC(18,2))
+    ├─ created_at (DATETIME2)
+    └─ Purpose: Lịch trả nợ dự kiến
+
+    Loan_Payment (PK: payment_id)
+    ├─ payment_id (BIGINT, PK)
+    ├─ facility_id (BIGINT, FK)
+    ├─ schedule_id (BIGINT, FK)
+    ├─ payment_amount (NUMERIC(18,2))
+    ├─ principal_paid (NUMERIC(18,2))
+    ├─ interest_paid (NUMERIC(18,2))
+    ├─ penalty_paid (NUMERIC(18,2))
+    ├─ payment_date (DATETIME2)
+    ├─ payment_method (NVARCHAR(50)) - bank_transfer, cash, check...
+    ├─ created_at (DATETIME2)
+    └─ Purpose: Ghi nhận thanh toán thực tế
+
+    Loan_Delinquency (PK: delinquency_id) ⭐ NEW
+    ├─ delinquency_id (BIGINT, PK)
+    ├─ facility_id (BIGINT, FK)
+    ├─ original_due_date (DATETIME2)
+    ├─ last_payment_date (DATETIME2)
+    ├─ current_overdue_days (INT)
+    ├─ principal_outstanding (NUMERIC(18,2))
+    ├─ interest_outstanding (NUMERIC(18,2))
+    ├─ penalty_outstanding (NUMERIC(18,2))
+    ├─ delinquency_status (NVARCHAR(50)) - current, resolved, escalated
+    ├─ escalation_level (INT) - 0=none, 1=notice, 2=formal demand, 3=legal
+    ├─ delinquency_start_date (DATETIME2)
+    ├─ last_action_date (DATETIME2)
+    ├─ expected_resolution_date (DATETIME2)
+    ├─ created_at (DATETIME2)
+    ├─ updated_at (DATETIME2)
+    └─ notes (NVARCHAR(MAX))
+    └─ Purpose: Theo dõi khoản vay quá hạn và escalation
+
+    Loan_Classification (PK: classification_id) ⭐ NEW
+    ├─ classification_id (BIGINT, PK)
+    ├─ facility_id (BIGINT, FK)
+    ├─ group_id (INT, FK → Risk_Group) - Group 1-5 (SBV)
+    ├─ days_overdue (INT)
+    ├─ outstanding_principal (NUMERIC(18,2))
+    ├─ provision_amount (NUMERIC(18,2))
+    ├─ classification_status (NVARCHAR(50)) - active, archived, reassessed
+    ├─ classified_by (BIGINT, FK → User)
+    ├─ classified_at (DATETIME2)
+    ├─ updated_at (DATETIME2)
+    └─ notes (NVARCHAR(MAX))
+    └─ Purpose: Phân loại rủi ro theo quy định SBV (Group 1-5)
+
+    Loan_Status_Migration (PK: migration_id)
+    ├─ migration_id (BIGINT, PK)
+    ├─ facility_id (BIGINT, FK)
+    ├─ from_group_id (INT) - Nhóm rủi ro cũ
+    ├─ to_group_id (INT) - Nhóm rủi ro mới
+    ├─ migration_date (DATETIME2)
+    ├─ reason (NVARCHAR(500))
+    ├─ created_at (DATETIME2)
+    └─ Purpose: Theo dõi di chuyển nhóm nợ theo thời gian
+
+    Transaction_Log (PK: transaction_id)
+    ├─ transaction_id (BIGINT, PK)
+    ├─ facility_id (BIGINT, FK)
+    ├─ transaction_type (NVARCHAR(50)) - disbursement, payment, penalty, write-off
+    ├─ transaction_amount (NUMERIC(18,2))
+    ├─ transaction_date (DATETIME2)
+    ├─ description (NVARCHAR(500))
+    ├─ created_at (DATETIME2)
+    └─ Purpose: Lịch sử giao dịch liên quan khoản vay
+
+    Monthly_Delinquency (PK: monthly_delinq_id)
+    ├─ monthly_delinq_id (BIGINT, PK)
+    ├─ month (NVARCHAR(20)) - YYYY-MM format
+    ├─ total_facilities (INT) - Tổng số facility
+    ├─ delinquent_facilities (INT) - Số facility quá hạn
+    ├─ total_outstanding (NUMERIC(18,2)) - Tổng dư nợ
+    ├─ total_delinquent (NUMERIC(18,2)) - Tổng nợ quá hạn
+    ├─ npl_ratio (NUMERIC(5,2)) - Tỷ lệ NPL (%)
+    ├─ created_at (DATETIME2)
+    └─ Purpose: Tóm tắt nợ xấu hàng tháng
+
+    Alert (PK: alert_id)
+    ├─ alert_id (BIGINT, PK)
+    ├─ facility_id (BIGINT, FK)
+    ├─ customer_id (BIGINT, FK)
+    ├─ alert_type (NVARCHAR(50)) - overdue, high_pd, risk_upgrade
+    ├─ severity (NVARCHAR(20)) - low, medium, high, critical
+    ├─ message (NVARCHAR(500))
+    ├─ is_resolved (BIT)
+    ├─ created_at (DATETIME2)
+    ├─ resolved_at (DATETIME2)
+    └─ Purpose: Cảnh báo rủi ro (quá hạn, PD cao, nâng cấp rủi ro)
+
+
+C. ĐÁNH GIÁ & GIẢI THÍCH RỦI RO (Risk Assessment)
+═══════════════════════════════════════════════════
+
+    RISK_PREDICTION (PK: prediction_id)
+    ├─ prediction_id (BIGINT, PK)
+    ├─ application_id (BIGINT, FK)
+    ├─ customer_id (BIGINT, FK)
+    ├─ risk_score (NUMERIC(10,4)) - 0.0 - 1.0
+    ├─ risk_level (NVARCHAR(50)) - low, medium, high, very_high
+    ├─ probability_of_default (NUMERIC(5,2)) - PD (%)
+    ├─ model_version (INT) - Version của model
+    ├─ prediction_date (DATETIME2)
+    ├─ created_at (DATETIME2)
+    └─ Purpose: Kết quả chấm điểm rủi ro cho application/customer
+
+    SHAP_Explanation (PK: explanation_id)
+    ├─ explanation_id (BIGINT, PK)
+    ├─ prediction_id (BIGINT, FK)
+    ├─ feature_name (NVARCHAR(100))
+    ├─ shap_value (NUMERIC(10,4)) - Giải thích độ ảnh hưởng
+    ├─ feature_value (NVARCHAR(200)) - Giá trị của feature
+    ├─ contribution_direction (NVARCHAR(20)) - increase/decrease risk
+    ├─ created_at (DATETIME2)
+    └─ Purpose: Giải thích chi tiết feature nào ảnh hưởng bao nhiêu
+
+    LINEAR_MODEL (PK: model_id)
+    ├─ model_id (INT, PK)
+    ├─ model_name (NVARCHAR(100))
+    ├─ model_type (NVARCHAR(50)) - logistic_regression, linear_regression
+    ├─ r_squared (NUMERIC(5,4))
+    ├─ mse (NUMERIC(10,4))
+    ├─ mae (NUMERIC(10,4))
+    ├─ training_date (DATETIME2)
+    ├─ is_active (BIT)
+    ├─ created_at (DATETIME2)
+    └─ Purpose: Quản lý mô hình tuyến tính chính
+
+    REGRESSION_COEFFICIENT (PK: coef_id)
+    ├─ coef_id (BIGINT, PK)
+    ├─ model_id (INT, FK)
+    ├─ feature_name (NVARCHAR(100))
+    ├─ coefficient_value (NUMERIC(10,6))
+    ├─ std_error (NUMERIC(10,6))
+    ├─ t_statistic (NUMERIC(10,4))
+    ├─ p_value (NUMERIC(10,6))
+    ├─ created_at (DATETIME2)
+    └─ Purpose: Hệ số hồi quy của từng feature
+
+    Model_Version (PK: version_id)
+    ├─ version_id (INT, PK)
+    ├─ model_id (INT, FK)
+    ├─ version_number (INT)
+    ├─ deployment_date (DATETIME2)
+    ├─ is_current (BIT)
+    ├─ notes (NVARCHAR(500))
+    ├─ created_at (DATETIME2)
+    └─ Purpose: Theo dõi các version model
+
+
+D. GIÁM SÁT DANH MỤC ĐẦU TƯ (Portfolio Management)
+═════════════════════════════════════════════════
+
+    Portfolio_Snapshot (PK: snapshot_id)
+    ├─ snapshot_id (BIGINT, PK)
+    ├─ snapshot_date (DATETIME2)
+    ├─ total_loans (INT) - Tổng số khoản vay
+    ├─ total_outstanding (NUMERIC(18,2)) - Tổng dư nợ
+    ├─ total_provisions (NUMERIC(18,2)) - Tổng dự phòng
+    ├─ npl_ratio (NUMERIC(5,2)) - Tỷ lệ NPL
+    ├─ average_pd (NUMERIC(5,2)) - Trung bình PD
+    ├─ created_at (DATETIME2)
+    └─ Purpose: Snapshot tổng hợp danh mục tại một thời điểm
+
+    Portfolio_Risk_Summary (PK: summary_id)
+    ├─ summary_id (BIGINT, PK)
+    ├─ summary_period (NVARCHAR(20)) - YYYY-MM
+    ├─ group_1_count (INT) - Số loans Group 1
+    ├─ group_1_outstanding (NUMERIC(18,2))
+    ├─ group_2_count (INT)
+    ├─ group_2_outstanding (NUMERIC(18,2))
+    ├─ ... (group_3 đến group_5 tương tự)
+    ├─ total_group_1_5 (INT)
+    ├─ total_outstanding (NUMERIC(18,2))
+    ├─ on_time_payment_rate (NUMERIC(5,2))
+    ├─ created_at (DATETIME2)
+    └─ Purpose: Tổng hợp chi tiết danh mục theo nhóm rủi ro
+
+
+E. NGƯỜI DÙNG & HỖ TRỢ (User Management & Support)
+═════════════════════════════════════════════════
+
+    User (PK: user_id)
+    ├─ user_id (BIGINT, PK)
+    ├─ role_id (INT, FK → Role)
+    ├─ username (NVARCHAR(50)) - UNIQUE
+    ├─ email (NVARCHAR(100))
+    ├─ password (NVARCHAR(255))
+    ├─ phone (NVARCHAR(20)) ⭐ NEW
+    ├─ full_name (NVARCHAR(100)) ⭐ NEW
+    ├─ user_type (NVARCHAR(20)) ⭐ NEW - analyst/manager
+    ├─ status (NVARCHAR(20)) ⭐ NEW - pending/approved/rejected/verified
+    ├─ verification_token (NVARCHAR(255)) ⭐ NEW
+    ├─ is_email_verified (BIT) ⭐ NEW
+    ├─ approved_by (BIGINT, FK) ⭐ NEW
+    ├─ created_at (DATETIME2)
+    ├─ updated_at (DATETIME2) ⭐ NEW
+    └─ Relationships:
+        ├─ Role (1:1 or N:1)
+        ├─ Chat_Session (1:N)
+        ├─ Audit_Log (1:N)
+        └─ Alert_Subscription (1:N)
+
+    Role (PK: role_id)
+    ├─ role_id (INT, PK)
+    ├─ role_name (NVARCHAR(50))
+    ├─ description (NVARCHAR(500))
+    └─ Data:
+        ├─ 1 = Admin (System Administrator)
+        ├─ 2 = Manager (Risk Manager)
+        ├─ 3 = Analyst (Credit Analyst)
+        └─ 4 = Viewer (Read-only access)
+
+    Chat_Session (PK: session_id)
+    ├─ session_id (BIGINT, PK)
+    ├─ user_id (BIGINT, FK)
+    ├─ session_start (DATETIME2)
+    ├─ session_end (DATETIME2)
+    ├─ created_at (DATETIME2)
+    └─ Relationships:
+        └─ Chat_History (1:N)
+
+    Chat_History (PK: chat_id)
+    ├─ chat_id (BIGINT, PK)
+    ├─ session_id (BIGINT, FK)
+    ├─ user_id (BIGINT, FK)
+    ├─ message (NVARCHAR(MAX))
+    ├─ response (NVARCHAR(MAX))
+    ├─ message_type (NVARCHAR(50)) - user, bot, system
+    ├─ created_at (DATETIME2)
+    └─ Purpose: Lịch sử chat với bot hỗ trợ
+
+    Alert_Subscription (PK: subscription_id)
+    ├─ subscription_id (BIGINT, PK)
+    ├─ user_id (BIGINT, FK)
+    ├─ alert_type (NVARCHAR(50))
+    ├─ alert_severity (NVARCHAR(20))
+    ├─ is_active (BIT)
+    ├─ created_at (DATETIME2)
+    └─ Purpose: Người dùng subscribe cảnh báo nào
+
+    Audit_Log (PK: audit_id)
+    ├─ audit_id (BIGINT, PK)
+    ├─ user_id (BIGINT, FK)
+    ├─ action (NVARCHAR(50)) - create, update, delete, approve, reject
+    ├─ entity_type (NVARCHAR(100)) - Customer, Loan_Application, User...
+    ├─ entity_id (BIGINT)
+    ├─ old_value (NVARCHAR(MAX))
+    ├─ new_value (NVARCHAR(MAX))
+    ├─ performed_at (DATETIME2)
+    └─ Purpose: Audit trail - ai sửa gì, khi nào, từ cái gì sang cái gì
+
+
+F. BẢNG THAM CHIẾU / STAGING (Reference & Staging Tables)
+═══════════════════════════════════════════════════════════
+
+    stg_Account
+    ├─ account_id (NVARCHAR(50))
+    ├─ account_name (NVARCHAR(200))
+    ├─ account_type (NVARCHAR(50))
+    ├─ created_at (DATETIME2)
+    └─ Purpose: Tài khoản từ hệ thống Core Banking
+
+    stg_Date
+    ├─ date_key (INT) - YYYYMMDD
+    ├─ full_date (DATETIME)
+    ├─ year (INT)
+    ├─ month (INT)
+    ├─ day (INT)
+    └─ Purpose: Dimension Date cho báo cáo
+
+    stg_Currency
+    ├─ currency_code (NVARCHAR(10))
+    ├─ currency_name (NVARCHAR(100))
+    ├─ exchange_rate (NUMERIC(10,4))
+    ├─ updated_at (DATETIME2)
+    └─ Purpose: Hỗ trợ báo cáo đa tiền tệ
+
+    stg_ExchangeRate
+    ├─ rate_id (INT)
+    ├─ from_currency (NVARCHAR(10))
+    ├─ to_currency (NVARCHAR(10))
+    ├─ rate (NUMERIC(10,4))
+    ├─ effective_date (DATETIME2)
+    └─ Purpose: Tỷ giá từ hệ thống tài chính
+
+    stg_SalesOrder
+    ├─ order_id (NVARCHAR(100))
+    ├─ customer_id (NVARCHAR(100))
+    ├─ order_amount (NUMERIC(18,2))
+    ├─ order_date (DATETIME2)
+    └─ Purpose: Dữ liệu bán hàng từ ERP (enrich khách hàng profile)
+
+    stg_FinanceFact
+    ├─ finance_id (BIGINT)
+    ├─ customer_id (NVARCHAR(100))
+    ├─ revenue (NUMERIC(18,2))
+    ├─ expense (NUMERIC(18,2))
+    ├─ period (NVARCHAR(20))
+    └─ Purpose: Số liệu tài chính khách hàng từ ERP/Accounting
+
+    stg_Scenario
+    ├─ scenario_id (INT)
+    ├─ scenario_name (NVARCHAR(100))
+    ├─ description (NVARCHAR(500))
+    ├─ parameters (NVARCHAR(MAX))
+    └─ Purpose: Các kịch bản stress-test (interest_rate_up, default_up...)
+
+
+TỔNG QUAN QUAN HỆ (Relationship Overview)
+═══════════════════════════════════════════
+
+Customer (Trung tâm)
+├─ 1 Customer --- N Customer_Employment
+├─ 1 Customer --- N FINANCIAL_INDICATOR
+├─ 1 Customer --- 1 Customer_Payment_Statistics
+├─ 1 Customer --- N Loan_Application
+├─ 1 Customer --- N Loan_Facility
+├─ 1 Customer --- N RISK_PREDICTION
+└─ 1 Customer --- N Alert
+
+Loan_Application
+├─ 1 Application --- N Loan_Facility
+└─ 1 Application --- N RISK_PREDICTION
+
+Loan_Facility (Trung tâm của quy trình vay)
+├─ 1 Facility --- N Loan_Repayment_Schedule
+├─ 1 Facility --- N Loan_Payment
+├─ 1 Facility --- N Loan_Delinquency
+├─ 1 Facility --- N Loan_Classification
+├─ 1 Facility --- N Loan_Status_Migration
+├─ 1 Facility --- N Transaction_Log
+├─ 1 Facility --- N Provision_Allocation
+└─ 1 Facility --- N Alert
+
+Risk_Prediction
+└─ 1 Prediction --- N SHAP_Explanation
+
+Risk Classification
+├─ Loan_Classification --- Risk_Group
+└─ Provision_Allocation --- Risk_Group
+
+User & Role
+├─ N User --- 1 Role
+├─ 1 User --- N Chat_Session
+├─ 1 User --- N Audit_Log
+└─ 1 User --- N Alert_Subscription
+
+
+KEY METRICS & KPIs
+═══════════════════
+
+1. NPL Ratio (Non-Performing Loan)
+   = Total Facility in Group 3-5 / Total Outstanding
+
+2. PD (Probability of Default)
+   = Số lượng default / Số lượng facility (tương ứng thời gian)
+
+3. LGD (Loss Given Default)
+   = Thực tế Loss / Outstanding Amount at Default
+
+4. EAD (Exposure at Default)
+   = Tổng tiền gốc + lãi phát sinh tới ngày default
+
+5. On-Time Payment Rate
+   = Số lần thanh toán đúng hạn / Tổng số kỳ thanh toán
+
+6. DTI Ratio (Debt to Income)
+   = Total Outstanding / Monthly Income
+
+7. Portfolio Risk Score
+   = Weighted Average Risk Score của tất cả loans
