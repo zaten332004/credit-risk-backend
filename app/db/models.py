@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Column, Date, DateTime, Numeric, ForeignKey, Integer, String, Text, UNIQUEIDENTIFIER
+from sqlalchemy import Boolean, Column, Date, DateTime, Numeric, ForeignKey, Integer, String, Text, BigInteger
 from sqlalchemy.orm import relationship
 
 from app.db.session import Base
@@ -26,12 +26,27 @@ class RoleDB(Base):
 class UserDB(Base):
     __tablename__ = "User"
 
-    user_id = Column(Integer, primary_key=True)
-    role_id = Column(Integer, ForeignKey("Role.role_id"), nullable=False)
+    user_id = Column(BigInteger, primary_key=True)
+    role_id = Column(Integer, ForeignKey("Role.role_id"), nullable=True)  # nullable for pending registrations
     username = Column(String(50), nullable=False, unique=True)
+    email = Column(String(100), nullable=False, unique=True)
     password = Column(String(255), nullable=False)
-    email = Column(String(100), nullable=True)
+    full_name = Column(String(100), nullable=True)
+    phone = Column(String(20), nullable=True)
+    
+    # Registration workflow fields
+    status = Column(String(20), nullable=False, default="pending")  # pending, approved, rejected, verified
+    user_type = Column(String(20), nullable=True)  # 'analyst' or 'manager' - auto-filled from registration_type
+    verification_token = Column(String(255), nullable=True)
+    verification_sent_at = Column(DateTime, nullable=True)
+    is_email_verified = Column(Boolean, default=False)
+    approved_by = Column(BigInteger, ForeignKey("User.user_id"), nullable=True)  # admin who approved
+    approved_at = Column(DateTime, nullable=True)
+    rejection_reason = Column(String(500), nullable=True)
+    
+    # Audit
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True)
 
     role = relationship("RoleDB", back_populates="users")
     chat_histories = relationship("ChatHistoryDB", back_populates="user")
@@ -46,8 +61,8 @@ class UserDB(Base):
 class CustomerDB(Base):
     __tablename__ = "Customer"
 
-    customer_id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("User.user_id"), nullable=True)
+    customer_id = Column(BigInteger, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=True)
     full_name = Column(String(150), nullable=False)
     age = Column(Integer, nullable=True)
     monthly_income = Column(Numeric(18, 2), nullable=True)
@@ -70,8 +85,8 @@ class CustomerDB(Base):
 class CustomerEmploymentDB(Base):
     __tablename__ = "Customer_Employment"
 
-    employment_id = Column(Integer, primary_key=True)
-    customer_id = Column(Integer, ForeignKey("Customer.customer_id"), nullable=False)
+    employment_id = Column(BigInteger, primary_key=True)
+    customer_id = Column(BigInteger, ForeignKey("Customer.customer_id"), nullable=False)
     company_name = Column(String(200), nullable=True)
     position = Column(String(100), nullable=True)
     years_of_experience = Column(Integer, nullable=True)
@@ -87,8 +102,8 @@ class CustomerEmploymentDB(Base):
 class LoanApplicationDB(Base):
     __tablename__ = "Loan_Application"
 
-    application_id = Column(Integer, primary_key=True)
-    customer_id = Column(Integer, ForeignKey("Customer.customer_id"), nullable=False)
+    application_id = Column(BigInteger, primary_key=True)
+    customer_id = Column(BigInteger, ForeignKey("Customer.customer_id"), nullable=False)
     loan_amount = Column(Numeric(18, 2), nullable=False)
     loan_term = Column(Integer, nullable=False)  # months
     interest_rate = Column(Numeric(10, 4), nullable=True)
@@ -107,9 +122,9 @@ class LoanApplicationDB(Base):
 class LoanFacilityDB(Base):
     __tablename__ = "Loan_Facility"
 
-    facility_id = Column(Integer, primary_key=True)
-    application_id = Column(Integer, ForeignKey("Loan_Application.application_id"), nullable=True)
-    customer_id = Column(Integer, ForeignKey("Customer.customer_id"), nullable=False)
+    facility_id = Column(BigInteger, primary_key=True)
+    application_id = Column(BigInteger, ForeignKey("Loan_Application.application_id"), nullable=True)
+    customer_id = Column(BigInteger, ForeignKey("Customer.customer_id"), nullable=False)
     facility_type = Column(String(50), nullable=True)  # term_loan, revolving, etc.
     approved_amount = Column(Numeric(18, 2), nullable=False)
     interest_rate = Column(Numeric(10, 4), nullable=True)
@@ -132,8 +147,8 @@ class LoanFacilityDB(Base):
 class LoanRepaymentScheduleDB(Base):
     __tablename__ = "Loan_Repayment_Schedule"
 
-    schedule_id = Column(Integer, primary_key=True)
-    facility_id = Column(Integer, ForeignKey("Loan_Facility.facility_id"), nullable=False)
+    schedule_id = Column(BigInteger, primary_key=True)
+    facility_id = Column(BigInteger, ForeignKey("Loan_Facility.facility_id"), nullable=False)
     installment_no = Column(Integer, nullable=False)
     due_date = Column(Date, nullable=False)
     principal_amount = Column(Numeric(18, 2), nullable=False)
@@ -152,9 +167,9 @@ class LoanRepaymentScheduleDB(Base):
 class LoanPaymentDB(Base):
     __tablename__ = "Loan_Payment"
 
-    payment_id = Column(Integer, primary_key=True)
-    facility_id = Column(Integer, ForeignKey("Loan_Facility.facility_id"), nullable=False)
-    schedule_id = Column(Integer, ForeignKey("Loan_Repayment_Schedule.schedule_id"), nullable=True)
+    payment_id = Column(BigInteger, primary_key=True)
+    facility_id = Column(BigInteger, ForeignKey("Loan_Facility.facility_id"), nullable=False)
+    schedule_id = Column(BigInteger, ForeignKey("Loan_Repayment_Schedule.schedule_id"), nullable=True)
     payment_date = Column(Date, nullable=False)
     amount_paid = Column(Numeric(18, 2), nullable=False)
     principal_paid = Column(Numeric(18, 2), nullable=True)
@@ -173,8 +188,8 @@ class LoanPaymentDB(Base):
 class LoanDelinquencyDB(Base):
     __tablename__ = "Loan_Delinquency"
 
-    delinquency_id = Column(Integer, primary_key=True)
-    facility_id = Column(Integer, ForeignKey("Loan_Facility.facility_id"), nullable=False)
+    delinquency_id = Column(BigInteger, primary_key=True)
+    facility_id = Column(BigInteger, ForeignKey("Loan_Facility.facility_id"), nullable=False)
     as_of_date = Column(Date, nullable=False)
     days_past_due = Column(Integer, nullable=False)
     overdue_amount = Column(Numeric(18, 2), nullable=True)
@@ -190,9 +205,9 @@ class LoanDelinquencyDB(Base):
 class AlertDB(Base):
     __tablename__ = "Alert"
 
-    alert_id = Column(Integer, primary_key=True)
-    facility_id = Column(Integer, ForeignKey("Loan_Facility.facility_id"), nullable=True)
-    customer_id = Column(Integer, ForeignKey("Customer.customer_id"), nullable=True)
+    alert_id = Column(BigInteger, primary_key=True)
+    facility_id = Column(BigInteger, ForeignKey("Loan_Facility.facility_id"), nullable=True)
+    customer_id = Column(BigInteger, ForeignKey("Customer.customer_id"), nullable=True)
     alert_type = Column(String(50), nullable=False)  # high_pd, delinquency, overdue
     severity = Column(String(20), nullable=False)  # low, medium, high
     message = Column(String(500), nullable=True)
@@ -210,8 +225,8 @@ class AlertDB(Base):
 class AlertSubscriptionDB(Base):
     __tablename__ = "Alert_Subscription"
 
-    subscription_id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("User.user_id"), nullable=False)
+    subscription_id = Column(BigInteger, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=False)
     alert_type = Column(String(50), nullable=False)
     alert_severity = Column(String(20), nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
@@ -226,8 +241,8 @@ class AlertSubscriptionDB(Base):
 class FinancialIndicatorDB(Base):
     __tablename__ = "FINANCIAL_INDICATOR"
 
-    indicator_id = Column(Integer, primary_key=True)
-    customer_id = Column(Integer, ForeignKey("Customer.customer_id"), nullable=False)
+    indicator_id = Column(BigInteger, primary_key=True)
+    customer_id = Column(BigInteger, ForeignKey("Customer.customer_id"), nullable=False)
     debt_to_income = Column(Numeric(10, 4), nullable=True)
     monthly_expense = Column(Numeric(18, 2), nullable=True)
     asset_value = Column(Numeric(18, 2), nullable=True)
@@ -242,7 +257,7 @@ class FinancialIndicatorDB(Base):
 class LinearModelDB(Base):
     __tablename__ = "LINEAR_MODEL"
 
-    model_id = Column(Integer, primary_key=True)
+    model_id = Column(BigInteger, primary_key=True)
     model_name = Column(String(100), nullable=False)
     version_tag = Column(String(50), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
@@ -260,8 +275,8 @@ class LinearModelDB(Base):
 class RegressionCoefficientDB(Base):
     __tablename__ = "REGRESSION_COEFFICIENT"
 
-    coefficient_id = Column(Integer, primary_key=True)
-    model_id = Column(Integer, ForeignKey("LINEAR_MODEL.model_id"), nullable=False)
+    coefficient_id = Column(BigInteger, primary_key=True)
+    model_id = Column(BigInteger, ForeignKey("LINEAR_MODEL.model_id"), nullable=False)
     feature_name = Column(String(100), nullable=False)
     beta_value = Column(Numeric(18, 6), nullable=False)
 
@@ -274,10 +289,10 @@ class RegressionCoefficientDB(Base):
 class RiskPredictionDB(Base):
     __tablename__ = "RISK_PREDICTION"
 
-    prediction_id = Column(Integer, primary_key=True)
-    application_id = Column(Integer, ForeignKey("Loan_Application.application_id"), nullable=True)
-    customer_id = Column(Integer, ForeignKey("Customer.customer_id"), nullable=True)
-    model_id = Column(Integer, ForeignKey("LINEAR_MODEL.model_id"), nullable=True)
+    prediction_id = Column(BigInteger, primary_key=True)
+    application_id = Column(BigInteger, ForeignKey("Loan_Application.application_id"), nullable=True)
+    customer_id = Column(BigInteger, ForeignKey("Customer.customer_id"), nullable=True)
+    model_id = Column(BigInteger, ForeignKey("LINEAR_MODEL.model_id"), nullable=True)
     risk_score = Column(Numeric(10, 6), nullable=False)
     risk_level = Column(String(20), nullable=True)  # low, medium, high
     predicted_at = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -294,8 +309,8 @@ class RiskPredictionDB(Base):
 class SHAPExplanationDB(Base):
     __tablename__ = "SHAP_Explanation"
 
-    explain_id = Column(Integer, primary_key=True)
-    prediction_id = Column(Integer, ForeignKey("RISK_PREDICTION.prediction_id"), nullable=False)
+    explain_id = Column(BigInteger, primary_key=True)
+    prediction_id = Column(BigInteger, ForeignKey("RISK_PREDICTION.prediction_id"), nullable=False)
     feature_name = Column(String(100), nullable=False)
     shap_value = Column(Numeric(18, 6), nullable=False)
     contribution_type = Column(String(20), nullable=True)  # positive, negative
@@ -310,8 +325,8 @@ class SHAPExplanationDB(Base):
 class ChatSessionDB(Base):
     __tablename__ = "Chat_Session"
 
-    session_id = Column(UNIQUEIDENTIFIER, primary_key=True, default=uuid4)
-    user_id = Column(Integer, ForeignKey("User.user_id"), nullable=False)
+    session_id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     last_interaction = Column(DateTime, nullable=True)
 
@@ -325,9 +340,9 @@ class ChatSessionDB(Base):
 class ChatHistoryDB(Base):
     __tablename__ = "Chat_History"
 
-    chat_id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("User.user_id"), nullable=False)
-    session_id = Column(UNIQUEIDENTIFIER, ForeignKey("Chat_Session.session_id"), nullable=True)
+    chat_id = Column(BigInteger, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=False)
+    session_id = Column(String(36), ForeignKey("Chat_Session.session_id"), nullable=True)
     message = Column(Text, nullable=False)
     bot_response = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -342,7 +357,7 @@ class ChatHistoryDB(Base):
 class PortfolioSnapshotDB(Base):
     __tablename__ = "Portfolio_Snapshot"
 
-    snapshot_id = Column(Integer, primary_key=True)
+    snapshot_id = Column(BigInteger, primary_key=True)
     snapshot_date = Column(Date, nullable=False)
     total_exposure = Column(Numeric(20, 2), nullable=True)
     npl_ratio = Column(Numeric(10, 4), nullable=True)
@@ -357,14 +372,52 @@ class PortfolioSnapshotDB(Base):
 class AuditLogDB(Base):
     __tablename__ = "Audit_Log"
 
-    audit_id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("User.user_id"), nullable=True)
+    audit_id = Column(BigInteger, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=True)
     action = Column(String(50), nullable=False)  # INSERT, UPDATE, DELETE
     entity_type = Column(String(100), nullable=False)
-    entity_id = Column(Integer, nullable=True)
+    entity_id = Column(BigInteger, nullable=True)
     old_value = Column(Text, nullable=True)
     new_value = Column(Text, nullable=True)
     performed_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     user = relationship("UserDB", back_populates="audit_logs")
+
+
+# ============================================================================
+# Chat Session (Gemini AI Chatbot)
+# ============================================================================
+class ChatSessionDB(Base):
+    __tablename__ = "Chat_Session"
+    
+    session_id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=False)
+    session_name = Column(String(255), nullable=False, comment="Name/title of chat session")
+    initial_context = Column(Text, nullable=True, comment="Initial context (customer info, etc)")
+    is_active = Column(Boolean, default=True, comment="Session status")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    closed_at = Column(DateTime, nullable=True)
+    
+    # Relationships
+    user = relationship("UserDB", back_populates="chat_sessions")
+    chat_history = relationship("ChatHistoryDB", back_populates="session", cascade="all, delete-orphan")
+
+
+# ============================================================================
+# Chat History (Gemini AI Chatbot Messages)
+# ============================================================================
+class ChatHistoryDB(Base):
+    __tablename__ = "Chat_History"
+    
+    message_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    session_id = Column(Integer, ForeignKey("Chat_Session.session_id"), nullable=False)
+    user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=False)
+    role = Column(String(20), nullable=False, comment="'user' or 'assistant'")
+    content = Column(Text, nullable=False, comment="Message content")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    
+    # Relationships
+    session = relationship("ChatSessionDB", back_populates="chat_history")
+    user = relationship("UserDB", back_populates="chat_messages")
+
 

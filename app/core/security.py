@@ -5,8 +5,11 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+from sqlalchemy.orm import Session
 
 from app.schemas.schemas import TokenData, User
+from app.db.session import SessionLocal
+from app.db.models import UserDB, RoleDB
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
@@ -19,30 +22,77 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 
-# In-memory user store cho demo; thực tế sẽ truy vấn DB/IdP
-_fake_users_db = {
-    "admin@example.com": {
-        "id": 1,
-        "email": "admin@example.com",
-        "full_name": "Admin User",
-        "hashed_password": pwd_context.hash("admin123"),
-        "is_active": True,
-        "is_admin": True,
-    }
-}
-
-
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 
+def get_db():
+    """Get database session"""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
 def authenticate_user(email: str, password: str) -> Optional[User]:
-    user_dict = _fake_users_db.get(email)
-    if not user_dict:
-        return None
-    if not verify_password(password, user_dict["hashed_password"]):
-        return None
-    return User(**user_dict)
+    """Legacy: authenticate by email - queries from database"""
+    db = SessionLocal()
+    try:
+        user = db.query(UserDB).filter(UserDB.email == email).first()
+        if not user:
+            return None
+        if not verify_password(password, user.password):
+            return None
+        
+        # Get role name
+        role = db.query(RoleDB).filter(RoleDB.role_id == user.role_id).first()
+        role_name = role.role_name if role else "viewer"
+        
+        return User(
+            id=user.user_id,
+            email=user.email,
+            full_name=user.username,
+            is_active=True,
+            is_admin=role_name.lower() == "admin",
+        )
+    finally:
+        db.close()
+
+
+def authenticate_user_by_username_or_email(username_or_email: str, password: str) -> Optional[dict]:
+    """Authenticate by username or email - queries from database, return user dict with role"""
+    db = SessionLocal()
+    try:
+        # Try email first
+        user = db.query(UserDB).filter(UserDB.email == username_or_email).first()
+        
+        # If not found, try username
+        if not user:
+            user = db.query(UserDB).filter(UserDB.username == username_or_email).first()
+        
+        if not user:
+            return None
+        
+        # Verify password
+        if not verify_password(password, user.password):
+            return None
+        
+        # Get role name
+        role = db.query(RoleDB).filter(RoleDB.role_id == user.role_id).first()
+        role_name = role.role_name.lower() if role else "viewer"
+        
+        return {
+            "id": user.user_id,
+            "username": user.username,
+            "email": user.email,
+            "full_name": user.username,
+            "is_active": True,
+            "is_admin": role_name == "admin",
+            "role": role_name,
+        }
+    finally:
+        db.close()
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -63,14 +113,30 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
         sub: str | None = payload.get("sub")
         if sub is None:
             raise credentials_exception
-        token_data = TokenData(sub=sub)
+        token_data = TokenData(sub=sub, role=payload.get("role"))
     except JWTError:
         raise credentials_exception
 
-    user_dict = _fake_users_db.get(token_data.sub)
-    if user_dict is None:
-        raise credentials_exception
-    return User(**user_dict)
+    # Query user from database
+    db = SessionLocal()
+    try:
+        user = db.query(UserDB).filter(UserDB.email == token_data.sub).first()
+        if user is None:
+            raise credentials_exception
+        
+        # Get role
+        role = db.query(RoleDB).filter(RoleDB.role_id == user.role_id).first()
+        role_name = role.role_name.lower() if role else "viewer"
+        
+        return User(
+            id=user.user_id,
+            email=user.email,
+            full_name=user.username,
+            is_active=True,
+            is_admin=role_name == "admin",
+        )
+    finally:
+        db.close()
 
 
 async def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
