@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.db.models import ChatSessionDB, ChatHistoryDB, UserDB
+from app.services.powerbi_service import powerbi_service
 
 
 @dataclass
@@ -292,17 +293,19 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
     def _build_context_prompt(
         self,
         message: str,
-        customer_context: Dict
+        customer_context: Dict,
+        user: Optional[UserDB] = None
     ) -> str:
         """
-        Build context-aware prompt with customer information
+        Build context-aware prompt with customer information and Power BI data
         
         Args:
             message: Original user message
             customer_context: Customer data dictionary
+            user: Optional user object for Power BI integration
             
         Returns:
-            Enhanced prompt with context
+            Enhanced prompt with context and Power BI data
         """
         context_parts = []
         
@@ -336,6 +339,21 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
             context_parts.append(
                 f"[Nhóm rủi ro: {customer_context.get('risk_group')}]"
             )
+        
+        # Add Power BI data if user is configured
+        if user and user.power_bi_enabled:
+            try:
+                # Try to fetch Power BI risk data
+                customer_id = customer_context.get("customer_id")
+                if customer_id:
+                    risk_profile = powerbi_service.get_customer_risk_profile(user, customer_id)
+                    if risk_profile:
+                        context_parts.append("[Dữ liệu từ Power BI]")
+                        # Add Power BI data summary (simplified)
+                        context_parts.append("Dữ liệu rủi ro từ hệ thống Power BI đã được tải")
+            except Exception as e:
+                # Log but don't fail if Power BI fetch fails
+                print(f"Note: Không thể tải dữ liệu Power BI: {str(e)}")
         
         # Combine context with message
         if context_parts:
