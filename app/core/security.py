@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPBearer, HTTPAuthenticationCredentials
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
@@ -11,7 +11,8 @@ from app.schemas.schemas import TokenData, User
 from app.db.session import SessionLocal
 from app.db.models import UserDB, RoleDB
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+# Use HTTPBearer for simple token-based auth (no username/password needed in Swagger)
+http_bearer = HTTPBearer(description="Enter your JWT token from /auth/login")
 
 # Dùng pbkdf2_sha256 để tránh lỗi backend bcrypt trên môi trường hiện tại
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
@@ -102,7 +103,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
+async def get_current_user(credentials: HTTPAuthenticationCredentials = Depends(http_bearer)) -> User:
+    """Extract token from HTTP Bearer header (simple copy-paste from login response)"""
+    token = credentials.credentials
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
