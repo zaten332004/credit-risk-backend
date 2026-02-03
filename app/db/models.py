@@ -44,16 +44,6 @@ class UserDB(Base):
     approved_at = Column(DateTime, nullable=True)
     rejection_reason = Column(String(500), nullable=True)
     
-    # Power BI Integration (Multi-workspace)
-    power_bi_enabled = Column(Boolean, default=False, nullable=False, comment="Is Power BI integration enabled?")
-    power_bi_tenant_id = Column(String(100), nullable=True, comment="Azure AD Tenant ID for Power BI")
-    power_bi_workspace_id = Column(String(100), nullable=True, comment="Power BI Workspace ID")
-    power_bi_dataset_id = Column(String(100), nullable=True, comment="Primary Dataset ID")
-    power_bi_api_key = Column(String(500), nullable=True, comment="Encrypted Power BI API Key/Token")
-    power_bi_service_principal_id = Column(String(100), nullable=True, comment="Service Principal ID")
-    power_bi_last_sync = Column(DateTime, nullable=True, comment="Last Power BI data sync timestamp")
-    power_bi_refresh_interval_minutes = Column(Integer, default=60, nullable=False, comment="Auto-refresh interval")
-    
     # Audit
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=True)
