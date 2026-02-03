@@ -44,22 +44,12 @@ class UserDB(Base):
     approved_at = Column(DateTime, nullable=True)
     rejection_reason = Column(String(500), nullable=True)
     
-    # Power BI Integration (Multi-workspace)
-    power_bi_enabled = Column(Boolean, default=False, nullable=False, comment="Is Power BI integration enabled?")
-    power_bi_tenant_id = Column(String(100), nullable=True, comment="Azure AD Tenant ID for Power BI")
-    power_bi_workspace_id = Column(String(100), nullable=True, comment="Power BI Workspace ID")
-    power_bi_dataset_id = Column(String(100), nullable=True, comment="Primary Dataset ID")
-    power_bi_api_key = Column(String(500), nullable=True, comment="Encrypted Power BI API Key/Token")
-    power_bi_service_principal_id = Column(String(100), nullable=True, comment="Service Principal ID")
-    power_bi_last_sync = Column(DateTime, nullable=True, comment="Last Power BI data sync timestamp")
-    power_bi_refresh_interval_minutes = Column(Integer, default=60, nullable=False, comment="Auto-refresh interval")
-    
     # Audit
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=True)
 
     role = relationship("RoleDB", back_populates="users")
-    chat_histories = relationship("ChatHistoryDB", back_populates="user")
+    chat_messages = relationship("ChatHistoryDB", back_populates="user")
     audit_logs = relationship("AuditLogDB", back_populates="user")
     chat_sessions = relationship("ChatSessionDB", back_populates="user")
     alert_subscriptions = relationship("AlertSubscriptionDB", back_populates="user")
@@ -330,35 +320,39 @@ class SHAPExplanationDB(Base):
 
 
 # ============================================================================
-# Chat Session
+# Chat Session (Gemini AI Chatbot)
 # ============================================================================
 class ChatSessionDB(Base):
     __tablename__ = "Chat_Session"
-
-    session_id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    
+    session_id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=False)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    last_interaction = Column(DateTime, nullable=True)
-
+    session_name = Column(String(255), nullable=False, comment="Name/title of chat session")
+    initial_context = Column(Text, nullable=True, comment="Initial context (customer info, etc)")
+    is_active = Column(Boolean, default=True, comment="Session status")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    closed_at = Column(DateTime, nullable=True)
+    
+    # Relationships
     user = relationship("UserDB", back_populates="chat_sessions")
-    messages = relationship("ChatHistoryDB", back_populates="session")
+    messages = relationship("ChatHistoryDB", back_populates="session", cascade="all, delete-orphan")
 
 
 # ============================================================================
-# Chat History
+# Chat History (Gemini AI Chatbot Messages)
 # ============================================================================
 class ChatHistoryDB(Base):
     __tablename__ = "Chat_History"
 
-    chat_id = Column(BigInteger, primary_key=True)
+    message_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    session_id = Column(Integer, ForeignKey("Chat_Session.session_id"), nullable=False)
     user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=False)
-    session_id = Column(String(36), ForeignKey("Chat_Session.session_id"), nullable=True)
-    message = Column(Text, nullable=False)
-    bot_response = Column(Text, nullable=True)
+    role = Column(String(20), nullable=False, comment="'user' or 'assistant'")
+    content = Column(Text, nullable=False, comment="Message content")
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
-    user = relationship("UserDB", back_populates="chat_histories")
     session = relationship("ChatSessionDB", back_populates="messages")
+    user = relationship("UserDB", back_populates="chat_messages")
 
 
 # ============================================================================
@@ -392,42 +386,5 @@ class AuditLogDB(Base):
     performed_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     user = relationship("UserDB", back_populates="audit_logs")
-
-
-# ============================================================================
-# Chat Session (Gemini AI Chatbot)
-# ============================================================================
-class ChatSessionDB(Base):
-    __tablename__ = "Chat_Session"
-    
-    session_id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=False)
-    session_name = Column(String(255), nullable=False, comment="Name/title of chat session")
-    initial_context = Column(Text, nullable=True, comment="Initial context (customer info, etc)")
-    is_active = Column(Boolean, default=True, comment="Session status")
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    closed_at = Column(DateTime, nullable=True)
-    
-    # Relationships
-    user = relationship("UserDB", back_populates="chat_sessions")
-    chat_history = relationship("ChatHistoryDB", back_populates="session", cascade="all, delete-orphan")
-
-
-# ============================================================================
-# Chat History (Gemini AI Chatbot Messages)
-# ============================================================================
-class ChatHistoryDB(Base):
-    __tablename__ = "Chat_History"
-    
-    message_id = Column(BigInteger, primary_key=True, autoincrement=True)
-    session_id = Column(Integer, ForeignKey("Chat_Session.session_id"), nullable=False)
-    user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=False)
-    role = Column(String(20), nullable=False, comment="'user' or 'assistant'")
-    content = Column(Text, nullable=False, comment="Message content")
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    
-    # Relationships
-    session = relationship("ChatSessionDB", back_populates="chat_history")
-    user = relationship("UserDB", back_populates="chat_messages")
 
 

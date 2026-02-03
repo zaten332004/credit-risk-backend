@@ -6,10 +6,11 @@ from typing import List, Optional
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.db.session import SessionLocal
+from app.db.session import get_db
 from app.db.loan_product_models import LoanProductDB, LoanPricingRuleDB
-from app.core.security import verify_token
+from app.core.security import get_current_active_user
 from app.services.loan_product_service import LoanProductService
+from app.db.models import UserDB
 
 router = APIRouter(prefix="/api/v1/products", tags=["Loan Products"])
 

@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
@@ -11,7 +11,8 @@ from app.schemas.schemas import TokenData, User
 from app.db.session import SessionLocal
 from app.db.models import UserDB, RoleDB
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+# HTTPBearer for simple token-based authentication
+http_bearer = HTTPBearer(description="Enter your JWT token")
 
 # Dùng pbkdf2_sha256 để tránh lỗi backend bcrypt trên môi trường hiện tại
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
@@ -23,7 +24,12 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    # Try hashed password verification first (if it's actually hashed)
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except:
+        # Fallback to plaintext comparison (for legacy passwords)
+        return plain_password == hashed_password
 
 
 def get_db():
@@ -102,7 +108,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(http_bearer)) -> User:
+    """Extract and validate JWT token from Bearer header"""
+    token = credentials.credentials
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
