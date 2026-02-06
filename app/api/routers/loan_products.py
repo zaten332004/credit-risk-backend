@@ -12,7 +12,7 @@ from app.core.security import get_current_active_user
 from app.services.loan_product_service import LoanProductService
 from app.db.models import UserDB
 
-router = APIRouter(prefix="/api/v1/products", tags=["Loan Products"])
+router = APIRouter(prefix="/products", tags=["Loan Products"])
 
 
 # Schemas

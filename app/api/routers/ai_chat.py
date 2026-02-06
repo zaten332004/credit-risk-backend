@@ -2,20 +2,21 @@
 Gemini AI Chatbot API Router
 Endpoints for chat conversations with financial risk analysis
 """
+import os
 from fastapi import APIRouter, Depends, HTTPException, status
-from typing import List, Optional
+from typing import List, Optional, Protocol
 from pydantic import BaseModel
 from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.core.security import get_current_active_user
-from app.db.models import UserDB
-from app.services.gemini_ai_chat_service import GeminiAIChatService, ChatResponse
+from app.schemas.schemas import User
+from app.services.mock_ai_chat_service import MockAIChatService
 
 
 # Router
-router = APIRouter(prefix="/api/v1/ai-chat", tags=["AI Chat - Gemini"])
+router = APIRouter(prefix="/ai-chat", tags=["AI Chat - Gemini"])
 
 
 # Schemas
@@ -33,13 +34,13 @@ class StartChatRequest(BaseModel):
 
 class SendMessageRequest(BaseModel):
     """Request to send a message"""
-    session_id: int
+    session_id: str
     message: str
     customer_context: Optional[dict] = None
     
     class Config:
         example = {
-            "session_id": 1,
+            "session_id": "00000000-0000-0000-0000-000000000000",
             "message": "Phân tích rủi ro tín dụng cho khách hàng này",
             "customer_context": {
                 "customer_id": 1,
@@ -59,14 +60,14 @@ class ChatMessageResponse(BaseModel):
 
 class StartChatResponse(BaseModel):
     """Response when starting a chat session"""
-    session_id: int
+    session_id: str
     greeting_message: str
     created_at: str
 
 
 class SendMessageResponse(BaseModel):
     """Response from sending a message"""
-    session_id: int
+    session_id: str
     message: str
     role: str
     timestamp: str
@@ -74,7 +75,7 @@ class SendMessageResponse(BaseModel):
 
 class ChatSessionResponse(BaseModel):
     """Chat session summary"""
-    session_id: int
+    session_id: str
     session_name: str
     is_active: bool
     created_at: str
@@ -83,7 +84,7 @@ class ChatSessionResponse(BaseModel):
 
 class SessionSummaryResponse(BaseModel):
     """Session summary when closing"""
-    session_id: int
+    session_id: str
     session_name: str
     duration: Optional[float]
     user_messages: int
@@ -102,14 +103,48 @@ def get_db():
 
 
 def get_chat_service():
-    """Get Gemini AI chat service"""
+    """Get AI chat service (Gemini or Mock)."""
+    provider = (os.getenv("AI_CHAT_PROVIDER") or "gemini").strip().lower()
+
+    if provider == "mock":
+        return MockAIChatService()
+
+    # Default: Gemini
     try:
+        from app.services.gemini_ai_chat_service import GeminiAIChatService
+
         return GeminiAIChatService()
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to initialize AI chat service: {str(e)}"
+            detail=(
+                f"Failed to initialize AI chat service: {str(e)}. "
+                "If you don't have a Gemini key, set AI_CHAT_PROVIDER=mock and restart the server."
+            ),
         )
+
+
+class AIChatService(Protocol):
+    def start_chat_session(
+        self, session: Session, user_id: int, session_name: str, initial_context: Optional[str] = None
+    ): ...
+
+    def send_message(
+        self,
+        session: Session,
+        session_id: str,
+        user_id: int,
+        message: str,
+        customer_context: Optional[dict] = None,
+    ): ...
+
+    def get_chat_history(self, session: Session, session_id: str, limit: int = 50): ...
+
+    def close_chat_session(self, session: Session, session_id: str): ...
+
+    def get_user_sessions(self, session: Session, user_id: int): ...
+
+    def generate_analysis_report(self, session: Session, session_id: str): ...
 
 
 # Endpoints
@@ -117,9 +152,9 @@ def get_chat_service():
 @router.post("/start", response_model=StartChatResponse)
 async def start_chat_session(
     request: StartChatRequest,
-    current_user: UserDB = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
-    chat_service: GeminiAIChatService = Depends(get_chat_service)
+    chat_service: AIChatService = Depends(get_chat_service)
 ):
     """
     Start a new AI chat session
@@ -135,7 +170,7 @@ async def start_chat_session(
     try:
         session_id, greeting = chat_service.start_chat_session(
             session=db,
-            user_id=current_user.user_id,
+            user_id=current_user.id,
             session_name=request.session_name,
             initial_context=request.initial_context
         )
@@ -156,9 +191,9 @@ async def start_chat_session(
 @router.post("/send", response_model=SendMessageResponse)
 async def send_message(
     request: SendMessageRequest,
-    current_user: UserDB = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
-    chat_service: GeminiAIChatService = Depends(get_chat_service)
+    chat_service: AIChatService = Depends(get_chat_service)
 ):
     """
     Send a message in a chat session
@@ -175,7 +210,7 @@ async def send_message(
         response = chat_service.send_message(
             session=db,
             session_id=request.session_id,
-            user_id=current_user.user_id,
+            user_id=current_user.id,
             message=request.message,
             customer_context=request.customer_context
         )
@@ -201,11 +236,11 @@ async def send_message(
 
 @router.get("/history/{session_id}", response_model=List[ChatMessageResponse])
 async def get_chat_history(
-    session_id: int,
+    session_id: str,
     limit: int = 50,
-    current_user: UserDB = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
-    chat_service: GeminiAIChatService = Depends(get_chat_service)
+    chat_service: AIChatService = Depends(get_chat_service)
 ):
     """
     Get chat history for a session
@@ -242,10 +277,10 @@ async def get_chat_history(
 
 @router.post("/close/{session_id}", response_model=SessionSummaryResponse)
 async def close_chat_session(
-    session_id: int,
-    current_user: UserDB = Depends(get_current_active_user),
+    session_id: str,
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
-    chat_service: GeminiAIChatService = Depends(get_chat_service)
+    chat_service: AIChatService = Depends(get_chat_service)
 ):
     """
     Close a chat session
@@ -278,9 +313,9 @@ async def close_chat_session(
 
 @router.get("/sessions", response_model=List[ChatSessionResponse])
 async def get_user_sessions(
-    current_user: UserDB = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
-    chat_service: GeminiAIChatService = Depends(get_chat_service)
+    chat_service: AIChatService = Depends(get_chat_service)
 ):
     """
     Get all chat sessions for current user
@@ -291,7 +326,7 @@ async def get_user_sessions(
     try:
         sessions = chat_service.get_user_sessions(
             session=db,
-            user_id=current_user.user_id
+            user_id=current_user.id
         )
         
         return [
@@ -306,12 +341,39 @@ async def get_user_sessions(
         )
 
 
+@router.get("/models")
+async def list_available_models(
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    List available Gemini models for the current API key/project.
+
+    If you're seeing "model not found", use this endpoint to pick a supported model id
+    and set it via env var `GEMINI_MODEL` (restart server after changing env).
+    """
+    try:
+        from app.services.gemini_ai_chat_service import genai
+
+        models = []
+        for m in genai.list_models():
+            models.append(
+                {
+                    "name": getattr(m, "name", None),
+                    "display_name": getattr(m, "display_name", None),
+                    "supported_generation_methods": getattr(m, "supported_generation_methods", None),
+                }
+            )
+        return {"models": models}
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
 @router.get("/report/{session_id}")
 async def generate_analysis_report(
-    session_id: int,
-    current_user: UserDB = Depends(get_current_active_user),
+    session_id: str,
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
-    chat_service: GeminiAIChatService = Depends(get_chat_service)
+    chat_service: AIChatService = Depends(get_chat_service)
 ):
     """
     Generate an analysis report from chat conversation

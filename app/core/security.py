@@ -32,6 +32,10 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return plain_password == hashed_password
 
 
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
+
+
 def get_db():
     """Get database session"""
     db = SessionLocal()
@@ -59,8 +63,9 @@ def authenticate_user(email: str, password: str) -> Optional[User]:
             id=user.user_id,
             email=user.email,
             full_name=user.username,
-            is_active=True,
+            is_active=bool(user.is_active),
             is_admin=role_name.lower() == "admin",
+            role=role_name.lower(),
         )
     finally:
         db.close()
@@ -93,7 +98,7 @@ def authenticate_user_by_username_or_email(username_or_email: str, password: str
             "username": user.username,
             "email": user.email,
             "full_name": user.username,
-            "is_active": True,
+            "is_active": bool(user.is_active),
             "is_admin": role_name == "admin",
             "role": role_name,
         }
@@ -140,8 +145,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(h
             id=user.user_id,
             email=user.email,
             full_name=user.username,
-            is_active=True,
+            is_active=bool(user.is_active),
             is_admin=role_name == "admin",
+            role=role_name,
         )
     finally:
         db.close()

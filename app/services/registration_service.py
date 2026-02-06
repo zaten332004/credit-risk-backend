@@ -8,6 +8,7 @@ from typing import Optional, Tuple
 
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
 
 from app.db.models import UserDB, RoleDB
 from app.core.security import pwd_context
@@ -124,9 +125,12 @@ class RegistrationService:
             if user.user_type == "analyst":
                 user.status = "approved"
                 # Assign analyst role
-                analyst_role = db.query(RoleDB).filter(RoleDB.role_name == "Analyst").first()
-                if analyst_role:
-                    user.role_id = analyst_role.role_id
+                analyst_role = db.query(RoleDB).filter(func.lower(RoleDB.role_name) == "analyst").first()
+                if not analyst_role:
+                    db.rollback()
+                    return False, "Analyst role is not configured"
+
+                user.role_id = analyst_role.role_id
                 
                 db.commit()
 
@@ -171,6 +175,9 @@ class RegistrationService:
             if user.status != "pending":
                 return False, f"User already {user.status}"
 
+            if user.user_type != "manager":
+                return False, "Only manager registrations require admin approval"
+
             if action.lower() == "approve":
                 # Check if email is verified
                 if not user.is_email_verified:
@@ -181,9 +188,12 @@ class RegistrationService:
                 user.approved_at = datetime.utcnow()
                 
                 # Assign manager role
-                manager_role = db.query(RoleDB).filter(RoleDB.role_name == "Manager").first()
-                if manager_role:
-                    user.role_id = manager_role.role_id
+                manager_role = db.query(RoleDB).filter(func.lower(RoleDB.role_name) == "manager").first()
+                if not manager_role:
+                    db.rollback()
+                    return False, "Manager role is not configured"
+
+                user.role_id = manager_role.role_id
 
                 db.commit()
 
@@ -214,7 +224,7 @@ class RegistrationService:
                     rejection_reason=rejection_reason
                 )
 
-                return True, f"Registration rejected for {registration.username}. Rejection email sent."
+                return True, f"Registration rejected for {user.username}. Rejection email sent."
 
             else:
                 return False, "Action must be 'approve' or 'reject'"

@@ -1,8 +1,9 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Column, Date, DateTime, Numeric, ForeignKey, Integer, String, Text, BigInteger
+from sqlalchemy import Boolean, Column, Date, DateTime, Numeric, ForeignKey, Integer, String, Text, BigInteger, func, UnicodeText
 from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.mssql import UNIQUEIDENTIFIER
 
 from app.db.session import Base
 
@@ -33,7 +34,7 @@ class UserDB(Base):
     password = Column(String(255), nullable=False)
     full_name = Column(String(100), nullable=True)
     phone = Column(String(20), nullable=True)
-    
+
     # Registration workflow fields
     status = Column(String(20), nullable=False, default="pending")  # pending, approved, rejected, verified
     user_type = Column(String(20), nullable=True)  # 'analyst' or 'manager' - auto-filled from registration_type
@@ -43,7 +44,8 @@ class UserDB(Base):
     approved_by = Column(BigInteger, ForeignKey("User.user_id"), nullable=True)  # admin who approved
     approved_at = Column(DateTime, nullable=True)
     rejection_reason = Column(String(500), nullable=True)
-    
+    is_active = Column(Boolean, default=True, nullable=False)
+
     # Audit
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=True)
@@ -320,18 +322,16 @@ class SHAPExplanationDB(Base):
 
 
 # ============================================================================
-# Chat Session (Gemini AI Chatbot)
+# Chat Session
 # ============================================================================
 class ChatSessionDB(Base):
     __tablename__ = "Chat_Session"
     
-    session_id = Column(Integer, primary_key=True, autoincrement=True)
+    # Matches SQL Server schema in `docs/database/Database_full_V1.sql`
+    session_id = Column(UNIQUEIDENTIFIER, primary_key=True, server_default=func.newid())
     user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=False)
-    session_name = Column(String(255), nullable=False, comment="Name/title of chat session")
-    initial_context = Column(Text, nullable=True, comment="Initial context (customer info, etc)")
-    is_active = Column(Boolean, default=True, comment="Session status")
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    closed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.sysutcdatetime())
+    last_interaction = Column(DateTime, nullable=True)
     
     # Relationships
     user = relationship("UserDB", back_populates="chat_sessions")
@@ -339,17 +339,19 @@ class ChatSessionDB(Base):
 
 
 # ============================================================================
-# Chat History (Gemini AI Chatbot Messages)
+# Chat History
 # ============================================================================
 class ChatHistoryDB(Base):
     __tablename__ = "Chat_History"
 
-    message_id = Column(BigInteger, primary_key=True, autoincrement=True)
-    session_id = Column(Integer, ForeignKey("Chat_Session.session_id"), nullable=False)
+    # Matches SQL Server schema in `docs/database/Database_full_V1.sql`
+    chat_id = Column(BigInteger, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=False)
-    role = Column(String(20), nullable=False, comment="'user' or 'assistant'")
-    content = Column(Text, nullable=False, comment="Message content")
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    # Use UnicodeText to preserve Vietnamese characters when writing/reading via pyodbc.
+    message = Column(UnicodeText, nullable=False, comment="User message")
+    bot_response = Column(UnicodeText, nullable=True, comment="Bot response")
+    created_at = Column(DateTime, nullable=False, server_default=func.sysutcdatetime())
+    session_id = Column(UNIQUEIDENTIFIER, ForeignKey("Chat_Session.session_id"), nullable=True)
 
     session = relationship("ChatSessionDB", back_populates="messages")
     user = relationship("UserDB", back_populates="chat_messages")

@@ -59,6 +59,8 @@ class User(BaseModel):
     email: str
     full_name: str | None = None
     is_active: bool = True
+    is_admin: bool = False
+    role: str | None = None
 
 
 class UserCreate(BaseModel):
@@ -72,9 +74,14 @@ class UserRead(BaseModel):
     user_id: int
     username: str
     email: str
-    role_id: int
+    role_id: int | None = None
+    full_name: str | None = None
+    user_type: str | None = None
+    status: str | None = None
+    is_email_verified: bool | None = None
     created_at: datetime
-
+    is_active: bool
+    
     class Config:
         from_attributes = True
 
