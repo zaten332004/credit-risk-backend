@@ -1,15 +1,16 @@
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy.orm import Session
 
 from app.core.security import (
-    authenticate_user,
     authenticate_user_by_username_or_email,
     create_access_token,
     get_current_active_user,
     get_current_admin_user,
 )
+from app.db.models import UserDB
+from app.db.session import get_db
 from app.schemas.schemas import (
     AlertRead,
     AlertResolveBody,
@@ -50,10 +51,12 @@ from app.schemas.schemas import (
     Token,
     UploadJobResponse,
     User,
-    UserCreate,
     UserRead,
+    UserRegistrationApprovalRequest,
 )
+from app.services import admin_service
 from app.services import services
+from app.services.registration_service import RegistrationService
 
 router = APIRouter()
 
@@ -402,41 +405,60 @@ async def alerts_resolve_endpoint(
 
 
 # ---------------------------------------------------------------------------
-# Group 6: Admin & System
+# Group 6: Admin
 # ---------------------------------------------------------------------------
 
 
 @router.get("/admin/users", response_model=List[UserRead], tags=["admin"])
 async def admin_list_users_endpoint(
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin_user),
 ) -> List[UserRead]:
-    return services.list_users()
+    return admin_service.list_users(db)
 
 
-@router.post("/admin/users", response_model=UserRead, tags=["admin"])
-async def admin_create_user_endpoint(
-    body: UserCreate,
+@router.get("/admin/users/search", response_model=List[UserRead], tags=["admin"])
+async def admin_search_users_endpoint(
+    user_id: Optional[int] = None,
+    name: Optional[str] = None,
+    name_contains: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user),
+) -> List[UserRead]:
+    return admin_service.list_users(db, user_id=user_id, name=name, name_contains=name_contains)
+
+
+@router.post("/admin/manager-registrations/decision", response_model=UserRead, tags=["admin"])
+async def admin_decide_manager_registration_endpoint(
+    body: UserRegistrationApprovalRequest,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin_user),
 ) -> UserRead:
-    return services.create_user(body)
+    success, message = RegistrationService.approve_registration(
+        db,
+        body.registration_id,
+        current_user.id,
+        body.action,
+        body.rejection_reason,
+    )
+    if not success:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
+
+    user = db.query(UserDB).filter(UserDB.user_id == body.registration_id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    return user
 
 
-@router.get("/admin/audit-logs", response_model=List[AuditLogRead], tags=["admin"])
-async def admin_audit_logs_endpoint(
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
-    user_id: Optional[int] = None,
+@router.patch("/admin/users/{target_user_id}/status", response_model=UserRead, tags=["admin"])
+async def admin_toggle_user_status_endpoint(
+    target_user_id: int,
+    is_active: bool,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin_user),
-) -> List[AuditLogRead]:
-    return services.list_audit_logs(from_date, to_date, user_id)
-
-
-@router.post("/admin/export", response_model=ExportResponse, tags=["admin"])
-async def admin_export_endpoint(
-    body: ExportRequestBody,
-    current_user: User = Depends(get_current_admin_user),
-) -> ExportResponse:
-    return services.export_data(body)
+) -> UserRead:
+    return admin_service.toggle_user_status(db, target_user_id, is_active)
 
 
 # ---------------------------------------------------------------------------

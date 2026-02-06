@@ -5,6 +5,7 @@ Integrates Google's Gemini AI with credit risk system
 import os
 import json
 from datetime import datetime
+from uuid import UUID
 from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass
 import google.generativeai as genai
@@ -26,7 +27,7 @@ class ChatMessage:
 @dataclass
 class ChatResponse:
     """Chat response structure"""
-    session_id: int
+    session_id: str
     message: str
     role: str
     timestamp: datetime
@@ -103,12 +104,11 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
             )
         
         genai.configure(api_key=self.api_key)
-        
+
+        model_name = self._resolve_model_name(os.getenv("GEMINI_MODEL"))
+
         # Initialize model
-        self.model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
-            system_instruction=self.SYSTEM_PROMPT
-        )
+        self.model = genai.GenerativeModel(model_name=model_name, system_instruction=self.SYSTEM_PROMPT)
         
         # Chat configuration
         self.safety_settings = [
@@ -136,6 +136,54 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
             "max_output_tokens": 2048,
             "response_mime_type": "text/plain"
         }
+
+    def _resolve_model_name(self, preferred: Optional[str]) -> str:
+        """
+        Resolve a model name that is available for the current API key/project and supports generateContent.
+
+        Notes:
+        - `google.generativeai` returns model names like `models/<id>` via list_models().
+        - Some keys/projects may not have access to certain model IDs.
+        """
+        preferred = (preferred or "").strip()
+
+        try:
+            models = list(genai.list_models())
+        except Exception:
+            # If listing models fails, fall back to the preferred value or a sane default.
+            return preferred or "gemini-1.5-flash"
+
+        supported = []
+        for m in models:
+            name = getattr(m, "name", None)
+            methods = getattr(m, "supported_generation_methods", None) or []
+            if name and any(str(x).lower() == "generatecontent" for x in methods):
+                supported.append(str(name))
+
+        if not supported:
+            return preferred or "gemini-1.5-flash"
+
+        # Try preferred first: accept either "gemini-*" or "models/gemini-*"
+        if preferred:
+            preferred_norm = preferred if preferred.startswith("models/") else f"models/{preferred}"
+            for cand in (preferred, preferred_norm):
+                if cand in supported:
+                    return cand
+
+        # Otherwise pick the first match from a stable preference list.
+        preference = [
+            "models/gemini-1.5-flash-latest",
+            "models/gemini-1.5-flash",
+            "models/gemini-1.5-pro-latest",
+            "models/gemini-1.5-pro",
+            "models/gemini-pro",
+        ]
+        for p in preference:
+            if p in supported:
+                return p
+
+        # Last resort: whatever is available.
+        return supported[0]
     
     def start_chat_session(
         self,
@@ -143,7 +191,7 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
         user_id: int,
         session_name: str,
         initial_context: Optional[str] = None
-    ) -> Tuple[int, str]:
+    ) -> Tuple[str, str]:
         """
         Start a new chat session
         
@@ -160,9 +208,7 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
             # Create chat session in database
             chat_session = ChatSessionDB(
                 user_id=user_id,
-                session_name=session_name,
-                is_active=True,
-                initial_context=initial_context
+                last_interaction=datetime.utcnow(),
             )
             session.add(chat_session)
             session.flush()
@@ -178,17 +224,23 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
             greeting += f"• Giải thích quy định ngân hàng\n\n"
             greeting += f"Bạn muốn tôi giúp gì?"
             
-            # Save greeting to history
-            assistant_msg = ChatHistoryDB(
-                session_id=session_id,
-                user_id=user_id,
-                role="assistant",
-                content=greeting
+            # Persist session metadata in first history row (DB schema doesn't have session_name columns)
+            meta = f"[SESSION_NAME]{session_name}[/SESSION_NAME]"
+            if initial_context:
+                meta += f"\n[INITIAL_CONTEXT]{initial_context}[/INITIAL_CONTEXT]"
+
+            session.add(
+                ChatHistoryDB(
+                    session_id=session_id,
+                    user_id=user_id,
+                    message=meta,
+                    bot_response=greeting,
+                    created_at=datetime.utcnow(),
+                )
             )
-            session.add(assistant_msg)
             session.commit()
             
-            return session_id, greeting
+            return str(session_id), greeting
             
         except Exception as e:
             session.rollback()
@@ -197,7 +249,7 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
     def send_message(
         self,
         session: Session,
-        session_id: int,
+        session_id: str,
         user_id: int,
         message: str,
         customer_context: Optional[Dict] = None
@@ -216,9 +268,11 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
             ChatResponse with AI response
         """
         try:
+            session_uuid = UUID(session_id)
+
             # Get chat session
             chat_session = session.query(ChatSessionDB).filter(
-                ChatSessionDB.session_id == session_id
+                ChatSessionDB.session_id == session_uuid
             ).first()
             
             if not chat_session:
@@ -234,16 +288,17 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
             
             # Get chat history for context
             history = session.query(ChatHistoryDB).filter(
-                ChatHistoryDB.session_id == session_id
+                ChatHistoryDB.session_id == session_uuid
             ).order_by(ChatHistoryDB.created_at).limit(20).all()
             
             # Build conversation history
             conversation = []
             for msg in history:
-                conversation.append({
-                    "role": msg.role,
-                    "parts": [msg.content]
-                })
+                if msg.message:
+                    conversation.append({"role": "user", "parts": [msg.message]})
+                if msg.bot_response:
+                    # Gemini API expects roles: "user" or "model"
+                    conversation.append({"role": "model", "parts": [msg.bot_response]})
             
             # Add current message
             conversation.append({
@@ -259,31 +314,26 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
             )
             
             ai_response = response.text
-            
-            # Save user message
-            user_msg = ChatHistoryDB(
-                session_id=session_id,
-                user_id=user_id,
-                role="user",
-                content=message
+
+            now = datetime.utcnow()
+            session.add(
+                ChatHistoryDB(
+                    session_id=session_uuid,
+                    user_id=user_id,
+                    message=enhanced_message,
+                    bot_response=ai_response,
+                    created_at=now,
+                )
             )
-            session.add(user_msg)
-            
-            # Save AI response
-            assistant_msg = ChatHistoryDB(
-                session_id=session_id,
-                user_id=user_id,
-                role="assistant",
-                content=ai_response
-            )
-            session.add(assistant_msg)
+
+            chat_session.last_interaction = now
             session.commit()
             
             return ChatResponse(
-                session_id=session_id,
+                session_id=str(session_uuid),
                 message=ai_response,
                 role="assistant",
-                timestamp=datetime.utcnow()
+                timestamp=now
             )
             
         except Exception as e:
@@ -364,7 +414,7 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
     def get_chat_history(
         self,
         session: Session,
-        session_id: int,
+        session_id: str,
         limit: int = 50
     ) -> List[Dict]:
         """
@@ -379,18 +429,18 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
             List of chat messages
         """
         try:
+            session_uuid = UUID(session_id)
             messages = session.query(ChatHistoryDB).filter(
-                ChatHistoryDB.session_id == session_id
+                ChatHistoryDB.session_id == session_uuid
             ).order_by(ChatHistoryDB.created_at).limit(limit).all()
-            
-            return [
-                {
-                    "role": msg.role,
-                    "content": msg.content,
-                    "timestamp": msg.created_at.isoformat()
-                }
-                for msg in messages
-            ]
+
+            out: List[Dict] = []
+            for m in messages:
+                if m.message:
+                    out.append({"role": "user", "content": m.message, "timestamp": m.created_at.isoformat()})
+                if m.bot_response:
+                    out.append({"role": "assistant", "content": m.bot_response, "timestamp": m.created_at.isoformat()})
+            return out
             
         except Exception as e:
             raise Exception(f"Error getting chat history: {str(e)}")
@@ -398,7 +448,7 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
     def close_chat_session(
         self,
         session: Session,
-        session_id: int
+        session_id: str
     ) -> Dict:
         """
         Close a chat session and get summary
@@ -411,8 +461,9 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
             Session summary with statistics
         """
         try:
+            session_uuid = UUID(session_id)
             chat_session = session.query(ChatSessionDB).filter(
-                ChatSessionDB.session_id == session_id
+                ChatSessionDB.session_id == session_uuid
             ).first()
             
             if not chat_session:
@@ -420,27 +471,24 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
             
             # Get statistics
             messages = session.query(ChatHistoryDB).filter(
-                ChatHistoryDB.session_id == session_id
+                ChatHistoryDB.session_id == session_uuid
             ).all()
             
             user_messages = len([m for m in messages if m.role == "user"])
             assistant_messages = len([m for m in messages if m.role == "assistant"])
             
-            # Close session
-            chat_session.is_active = False
-            chat_session.closed_at = datetime.utcnow()
+            # No explicit close columns in current DB schema; update last interaction.
+            chat_session.last_interaction = datetime.utcnow()
             session.commit()
             
             return {
-                "session_id": session_id,
-                "session_name": chat_session.session_name,
-                "duration": (
-                    chat_session.closed_at - chat_session.created_at
-                ).total_seconds() if chat_session.closed_at else None,
+                "session_id": str(session_uuid),
+                "session_name": f"Session {chat_session.session_id}",
+                "duration": None,
                 "user_messages": user_messages,
                 "assistant_messages": assistant_messages,
                 "total_messages": len(messages),
-                "closed_at": chat_session.closed_at.isoformat() if chat_session.closed_at else None
+                "closed_at": None
             }
             
         except Exception as e:
@@ -469,11 +517,11 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
             
             return [
                 {
-                    "session_id": s.session_id,
-                    "session_name": s.session_name,
-                    "is_active": s.is_active,
+                    "session_id": str(s.session_id),
+                    "session_name": f"Session {s.session_id}",
+                    "is_active": True,
                     "created_at": s.created_at.isoformat(),
-                    "closed_at": s.closed_at.isoformat() if s.closed_at else None
+                    "closed_at": None
                 }
                 for s in sessions
             ]
@@ -484,7 +532,7 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
     def generate_analysis_report(
         self,
         session: Session,
-        session_id: int
+        session_id: str
     ) -> str:
         """
         Generate analysis report from chat conversation
@@ -497,15 +545,19 @@ Luôn tuân thủ quy định ngân hàng Việt Nam và chuẩn mực quốc t�
             Generated report
         """
         try:
+            session_uuid = UUID(session_id)
             # Get chat history
             messages = session.query(ChatHistoryDB).filter(
-                ChatHistoryDB.session_id == session_id
+                ChatHistoryDB.session_id == session_uuid
             ).all()
             
             # Build conversation summary
             conversation_text = ""
             for msg in messages:
-                conversation_text += f"\n{msg.role.upper()}:\n{msg.content}\n"
+                if msg.message:
+                    conversation_text += f"\nUSER:\n{msg.message}\n"
+                if msg.bot_response:
+                    conversation_text += f"\nASSISTANT:\n{msg.bot_response}\n"
             
             # Generate report using Gemini
             report_prompt = f"""
