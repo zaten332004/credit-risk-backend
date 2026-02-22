@@ -320,38 +320,34 @@ class SHAPExplanationDB(Base):
 
 
 # ============================================================================
-# Chat Session (Gemini AI Chatbot)
+# Chat Session (Gemini AI Chatbot) - khớp DB thật: session_id GUID, user_id, created_at, last_interaction
 # ============================================================================
 class ChatSessionDB(Base):
     __tablename__ = "Chat_Session"
-    
-    session_id = Column(Integer, primary_key=True, autoincrement=True)
+
+    session_id = Column(String(36), primary_key=True)  # uniqueidentifier trong SQL Server, lưu dạng "uuid-string"
     user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=False)
-    session_name = Column(String(255), nullable=False, comment="Name/title of chat session")
-    initial_context = Column(Text, nullable=True, comment="Initial context (customer info, etc)")
-    is_active = Column(Boolean, default=True, comment="Session status")
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    closed_at = Column(DateTime, nullable=True)
-    
-    # Relationships
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_interaction = Column(DateTime, nullable=True)
+
     user = relationship("UserDB", back_populates="chat_sessions")
     messages = relationship("ChatHistoryDB", back_populates="session", cascade="all, delete-orphan")
 
 
 # ============================================================================
-# Chat History (Gemini AI Chatbot Messages)
+# Chat History - khớp DB thật: chat_id, user_id, message, bot_response, created_at, session_id
 # ============================================================================
 class ChatHistoryDB(Base):
     __tablename__ = "Chat_History"
 
-    message_id = Column(BigInteger, primary_key=True, autoincrement=True)
-    session_id = Column(Integer, ForeignKey("Chat_Session.session_id"), nullable=False)
+    chat_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    session_id = Column(String(36), ForeignKey("Chat_Session.session_id"), nullable=True)
     user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=False)
-    role = Column(String(20), nullable=False, comment="'user' or 'assistant'")
-    content = Column(Text, nullable=False, comment="Message content")
+    message = Column(Text, nullable=False)  # user message
+    bot_response = Column(Text, nullable=True)   # assistant reply
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
-    session = relationship("ChatSessionDB", back_populates="messages")
+    session = relationship("ChatSessionDB", back_populates="messages", foreign_keys=[session_id])
     user = relationship("UserDB", back_populates="chat_messages")
 
 

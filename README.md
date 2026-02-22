@@ -291,6 +291,36 @@ SECRET_KEY=your-super-secret-key
 
 # Gemini AI
 GEMINI_API_KEY=your-google-gemini-api-key
+# Optional: default Gemini model (backend can also be overridden per message via /ai-chat/models + model param)
+GEMINI_MODEL=gemini-2.5-flash-lite
+# AI chat provider (optional): gemini|openai|langflow|mock
+AI_CHAT_PROVIDER=gemini
+# If set to 1/true, fallback to mock responses on provider errors (default: 0/false)
+AI_CHAT_FALLBACK_TO_MOCK=0
+# Optional: allowlist/tier mapping for UI model picker (defaults shown below)
+AI_CHAT_GEMINI_MODEL_FAST=gemini-2.5-flash-lite
+AI_CHAT_GEMINI_MODEL_THINKING=gemini-2.5-flash
+AI_CHAT_GEMINI_MODEL_PRO=gemini-2.5-pro
+# AI analytics context source (optional): db|powerbi (default: db)
+AI_CHAT_CONTEXT_SOURCE=db
+
+# Power BI (optional, for AI_CHAT_CONTEXT_SOURCE=powerbi)
+POWER_BI_TENANT_ID=your-tenant-id
+POWER_BI_CLIENT_ID=your-service-principal-client-id
+POWER_BI_CLIENT_SECRET=your-service-principal-client-secret
+POWER_BI_WORKSPACE_ID=your-workspace-id
+POWER_BI_DATASET_ID=your-dataset-id
+# Approach A (recommended): query a fixed "contract" table inside the dataset
+POWER_BI_AI_CONTEXT_TABLE=AI_Context
+POWER_BI_AI_CONTEXT_MAX_ROWS=200
+# Optional: limit formatted context length
+POWER_BI_AI_CONTEXT_MAX_CHARS=4000
+# Optional: warn if these keys are missing (comma-separated)
+POWER_BI_AI_CONTEXT_REQUIRED_KEYS=DatasetName,DateRange
+# Optional: custom DAX query for AI context (overrides contract table)
+POWER_BI_AI_CONTEXT_DAX=
+# Optional (debug only): allow calling /ai-chat/powerbi-query without admin role
+AI_CHAT_POWERBI_QUERY_ALLOW_ANY=0
 
 # Email (optional)
 SMTP_SERVER=smtp.gmail.com
@@ -302,9 +332,41 @@ SENDER_PASSWORD=your-app-password
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 REFRESH_TOKEN_EXPIRE_DAYS=7
+
+# Frontend (CORS) - optional, comma-separated
+CORS_ALLOW_ORIGINS=http://localhost:5173,http://localhost:3000
 ```
 
 ---
+
+## Power BI AI Context (Approach A)
+
+If you want AI chat to use only Power BI dataset data (and not read analytics from the SQL DB), set:
+- `AI_CHAT_CONTEXT_SOURCE=powerbi`
+
+Then, inside the Power BI dataset, create a **calculated table** named `AI_Context` (or set `POWER_BI_AI_CONTEXT_TABLE`).
+The backend will query this table to build prompt context, so each dataset can have different internal tables without changing backend code.
+
+Recommended columns:
+- `Key` (text, required)
+- `TextValue` (text, optional)
+- `NumberValue` (numeric, optional)
+- `UpdatedAt` (datetime/text, optional)
+
+Example calculated table (Power BI Desktop → Modeling → New table):
+
+```DAX
+AI_Context =
+UNION (
+    ROW ( "Key", "DatasetName", "TextValue", "Finance Model", "NumberValue", BLANK (), "UpdatedAt", NOW () ),
+    ROW ( "Key", "TotalSales", "TextValue", BLANK (), "NumberValue", SUM ( FactInternetSales[SalesAmount] ), "UpdatedAt", NOW () ),
+    ROW ( "Key", "TotalFinanceAmount", "TextValue", BLANK (), "NumberValue", SUM ( FactFinance[Amount] ), "UpdatedAt", NOW () )
+)
+```
+
+Notes:
+- Pick measures/columns that exist in your dataset.
+- The backend only reads from Power BI in this mode; it still stores chat history in the app database.
 
 ## 🧪 Testing
 

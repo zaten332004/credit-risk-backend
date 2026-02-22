@@ -141,6 +141,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(h
             email=user.email,
             full_name=user.username,
             is_active=True,
+            role=role_name,
             is_admin=role_name == "admin",
         )
     finally:
