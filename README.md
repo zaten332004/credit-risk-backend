@@ -110,8 +110,20 @@ A comprehensive financial risk analysis system with AI-powered chatbot, loan man
 - `POST /ai-chat/send` - Send message & get AI response
 - `GET /ai-chat/history/{session_id}` - Get conversation history
 - `POST /ai-chat/close/{session_id}` - Close session with summary
+- `POST /ai-chat/sessions/{session_id}/close` - Close session (alias)
 - `GET /ai-chat/sessions` - List user's chat sessions
+- `DELETE /ai-chat/sessions/{session_id}` - Delete a chat session (and its messages)
+- `POST /ai-chat/sessions/{session_id}/pin` - Pin a session
+- `POST /ai-chat/sessions/{session_id}/unpin` - Unpin a session
+- `GET /ai-chat/models` - List selectable AI models (if supported by provider)
+- `GET /ai-chat/debug` - Debug provider/model/config
+- `GET /ai-chat/context-preview` - Preview analysis context (db/powerbi)
 - `GET /ai-chat/report/{session_id}` - Generate analysis report
+
+> Note (SQL Server Unicode): if Vietnamese text is saved as `????` in chat history, ensure
+> `Chat_History.message` and `Chat_History.bot_response` are `NVARCHAR` (see `scripts/sqlserver_fix_chat_history_unicode.sql`).
+
+> Note (Pinned sessions): run `scripts/sqlserver_create_chat_session_pin.sql` to enable pin/unpin without changing `Chat_Session`.
 
 ### **Loan Management** (`/api/v1/loan`)
 - `POST /loan/apply` - Apply for loan

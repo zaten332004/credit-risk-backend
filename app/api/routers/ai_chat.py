@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.security import get_current_active_user
 from app.db.session import SessionLocal
+from app.db.models import ChatHistoryDB, ChatSessionDB, ChatSessionPinDB
 from app.schemas.schemas import User
 from app.services.gemini_ai_chat_service import GeminiResourceExhaustedError
 from app.services.mock_ai_chat_service import MockAIChatService
@@ -114,6 +115,8 @@ class ChatSessionResponse(BaseModel):
     sessionName: str
     is_active: bool
     isActive: bool
+    is_pinned: bool = False
+    isPinned: bool = False
     created_at: str
     createdAt: str
     closed_at: Optional[str] = None
@@ -154,6 +157,29 @@ class AIChatService(Protocol):
 
 def _provider_name() -> str:
     return (os.getenv("AI_CHAT_PROVIDER") or settings.ai_chat_provider or "gemini").strip().lower()
+
+
+def _resolved_provider_name(chat_service: object) -> str:
+    # Avoid importing provider-specific classes here; keep it lightweight and robust.
+    name = (getattr(chat_service, "__class__", type(chat_service)).__name__ or "").strip().lower()
+    module = (getattr(getattr(chat_service, "__class__", None), "__module__", "") or "").strip().lower()
+    marker = f"{module}.{name}"
+
+    if "mock" in marker:
+        return "mock"
+    if "openai" in marker:
+        return "openai"
+    if "langflow" in marker:
+        return "langflow"
+    if "gemini" in marker:
+        return "gemini"
+    return "unknown"
+
+
+def _looks_like_missing_db_column(err: Exception, column_name: str) -> bool:
+    s = (str(err) or "").lower()
+    col = (column_name or "").lower()
+    return ("invalid column name" in s and col in s) or ("unknown column" in s and col in s)
 
 
 def _user_role(user: User) -> str:
@@ -355,6 +381,7 @@ async def start_chat_session(
         initial_context=request.initial_context,
     )
     created_at = datetime.utcnow().isoformat()
+    resolved_provider = _resolved_provider_name(chat_service)
     return StartChatResponse(
         session_id=session_id,
         sessionId=session_id,
@@ -363,8 +390,8 @@ async def start_chat_session(
         greeting=greeting,
         created_at=created_at,
         createdAt=created_at,
-        provider=provider,
-        model=selected_model,
+        provider=resolved_provider if resolved_provider != "unknown" else provider,
+        model=selected_model if resolved_provider == "gemini" else None,
     )
 
 
@@ -439,6 +466,9 @@ async def send_message(
         else:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
+    resolved_provider = "mock" if provider == "mock" else _resolved_provider_name(chat_service)
+    resolved_model = selected_model if resolved_provider == "gemini" else None
+
     return SendMessageResponse(
         success=True,
         session_id=resp.session_id,
@@ -455,8 +485,8 @@ async def send_message(
         createdSession=created_session,
         greeting_message=greeting_message,
         greetingMessage=greeting_message,
-        provider=provider,
-        model=selected_model,
+        provider=resolved_provider if resolved_provider != "unknown" else provider,
+        model=resolved_model,
         error=err,
     )
 
@@ -486,6 +516,80 @@ async def close_chat_session(
     return SessionSummaryResponse(**summary)
 
 
+@router.post("/sessions/{session_id}/close", response_model=SessionSummaryResponse)
+async def close_chat_session_alias(
+    session_id: str,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+    chat_service: AIChatService = Depends(get_chat_service),
+):
+    # REST-style alias for UI: /sessions/{id}/close
+    session_id = _ensure_uuid(session_id)
+    summary = chat_service.close_chat_session(session=db, session_id=session_id)
+    return SessionSummaryResponse(**summary)
+
+
+@router.post("/sessions/{session_id}/pin")
+async def pin_chat_session(
+    session_id: str,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    sid = _ensure_uuid(session_id)
+    q = db.query(ChatSessionDB).filter(ChatSessionDB.session_id == sid)
+    if _user_role(current_user) != "admin":
+        q = q.filter(ChatSessionDB.user_id == current_user.id)
+    row = q.first()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found")
+    try:
+        exists = (
+            db.query(ChatSessionPinDB)
+            .filter(ChatSessionPinDB.session_id == sid, ChatSessionPinDB.user_id == row.user_id)
+            .first()
+        )
+        if not exists:
+            db.add(ChatSessionPinDB(session_id=sid, user_id=row.user_id))
+        db.commit()
+    except Exception as e:
+        # If the optional table doesn't exist yet, return a clear message.
+        if "chat_session_pin" in (str(e) or "").lower():
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Pinned sessions not available: missing DB table Chat_Session_Pin. Run scripts/sqlserver_create_chat_session_pin.sql.",
+            )
+        raise
+    return {"success": True, "session_id": sid, "pinned": True}
+
+
+@router.post("/sessions/{session_id}/unpin")
+async def unpin_chat_session(
+    session_id: str,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    sid = _ensure_uuid(session_id)
+    q = db.query(ChatSessionDB).filter(ChatSessionDB.session_id == sid)
+    if _user_role(current_user) != "admin":
+        q = q.filter(ChatSessionDB.user_id == current_user.id)
+    row = q.first()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found")
+    try:
+        db.query(ChatSessionPinDB).filter(ChatSessionPinDB.session_id == sid, ChatSessionPinDB.user_id == row.user_id).delete(
+            synchronize_session=False
+        )
+        db.commit()
+    except Exception as e:
+        if "chat_session_pin" in (str(e) or "").lower():
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Pinned sessions not available: missing DB table Chat_Session_Pin. Run scripts/sqlserver_create_chat_session_pin.sql.",
+            )
+        raise
+    return {"success": True, "session_id": sid, "pinned": False}
+
+
 @router.get("/sessions", response_model=List[ChatSessionResponse])
 async def get_user_sessions(
     current_user: User = Depends(get_current_active_user),
@@ -498,6 +602,7 @@ async def get_user_sessions(
         sid = s.get("session_id")
         name = s.get("session_name")
         active = s.get("is_active")
+        pinned = bool(s.get("is_pinned") or s.get("pinned") or False)
         created = s.get("created_at")
         closed = s.get("closed_at")
         out.append(
@@ -508,6 +613,8 @@ async def get_user_sessions(
                 sessionName=name,
                 is_active=active,
                 isActive=active,
+                is_pinned=pinned,
+                isPinned=pinned,
                 created_at=created,
                 createdAt=created,
                 closed_at=closed,
@@ -517,11 +624,45 @@ async def get_user_sessions(
     return out
 
 
+@router.delete("/sessions/{session_id}")
+async def delete_chat_session(
+    session_id: str,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    sid = _ensure_uuid(session_id)
+    q = db.query(ChatSessionDB).filter(ChatSessionDB.session_id == sid)
+    if _user_role(current_user) != "admin":
+        q = q.filter(ChatSessionDB.user_id == current_user.id)
+
+    row = q.first()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found")
+
+    # Delete messages first to avoid FK issues on some DB schemas.
+    db.query(ChatHistoryDB).filter(ChatHistoryDB.session_id == sid).delete(synchronize_session=False)
+    db.query(ChatSessionDB).filter(ChatSessionDB.session_id == sid).delete(synchronize_session=False)
+    db.commit()
+    return {"success": True, "session_id": sid}
+
+
 @router.get("/debug")
 async def ai_chat_debug(current_user: User = Depends(get_current_active_user)):
     provider = _provider_name()
+    resolved_provider: Optional[str] = None
+    resolved_model: Optional[str] = None
+    provider_init_error: Optional[str] = None
+    try:
+        chat_service = get_chat_service()
+        resolved_provider = _resolved_provider_name(chat_service)
+        resolved_model = getattr(chat_service, "model", None)
+    except Exception as e:
+        provider_init_error = str(e)
     return {
         "provider": provider,
+        "resolved_provider": resolved_provider,
+        "resolved_model": resolved_model,
+        "provider_init_error": provider_init_error,
         "has_gemini_key": bool(os.getenv("GEMINI_API_KEY") or settings.gemini_api_key),
         "gemini_model": (os.getenv("GEMINI_MODEL") or settings.gemini_model or "gemini-2.0-flash").strip() or None,
         "context_source": (os.getenv("AI_CHAT_CONTEXT_SOURCE") or settings.ai_chat_context_source or "db").strip().lower(),

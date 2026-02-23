@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Column, Date, DateTime, Numeric, ForeignKey, Integer, String, Text, BigInteger
+from sqlalchemy import Boolean, Column, Date, DateTime, Numeric, ForeignKey, Integer, String, Text, BigInteger, UnicodeText
 from sqlalchemy.orm import relationship
 
 from app.db.session import Base
@@ -329,9 +329,20 @@ class ChatSessionDB(Base):
     user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     last_interaction = Column(DateTime, nullable=True)
-
     user = relationship("UserDB", back_populates="chat_sessions")
     messages = relationship("ChatHistoryDB", back_populates="session", cascade="all, delete-orphan")
+
+
+# ============================================================================
+# Chat Session Pin (optional feature)
+# - Separate table so existing DBs don't break if not migrated.
+# ============================================================================
+class ChatSessionPinDB(Base):
+    __tablename__ = "Chat_Session_Pin"
+
+    session_id = Column(String(36), ForeignKey("Chat_Session.session_id"), primary_key=True)
+    user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=False)
+    pinned_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 # ============================================================================
@@ -343,8 +354,9 @@ class ChatHistoryDB(Base):
     chat_id = Column(BigInteger, primary_key=True, autoincrement=True)
     session_id = Column(String(36), ForeignKey("Chat_Session.session_id"), nullable=True)
     user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=False)
-    message = Column(Text, nullable=False)  # user message
-    bot_response = Column(Text, nullable=True)   # assistant reply
+    # IMPORTANT: Use UnicodeText so Vietnamese text isn't lost on SQL Server (NVARCHAR/TEXT Unicode).
+    message = Column(UnicodeText, nullable=False)  # user message
+    bot_response = Column(UnicodeText, nullable=True)   # assistant reply
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     session = relationship("ChatSessionDB", back_populates="messages", foreign_keys=[session_id])

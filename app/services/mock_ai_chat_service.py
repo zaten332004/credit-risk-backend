@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from app.db.models import ChatHistoryDB, ChatSessionDB
+from app.db.models import ChatHistoryDB, ChatSessionDB, ChatSessionPinDB
 
 
 @dataclass
@@ -163,11 +163,20 @@ class MockAIChatService:
             .order_by(ChatSessionDB.created_at.desc())
             .all()
         )
+        pinned_ids = set()
+        try:
+            pinned_rows = session.query(ChatSessionPinDB.session_id).filter(ChatSessionPinDB.user_id == user_id).all()
+            pinned_ids = {str(r[0]) for r in pinned_rows}
+        except Exception:
+            pinned_ids = set()
+
+        sessions = sorted(sessions, key=lambda s: (0 if str(s.session_id) in pinned_ids else 1,))
         return [
             {
                 "session_id": str(s.session_id),
                 "session_name": f"Session {str(s.session_id)[:8]}",
                 "is_active": True,
+                "is_pinned": str(s.session_id) in pinned_ids,
                 "created_at": s.created_at.isoformat(),
                 "closed_at": None,
             }
