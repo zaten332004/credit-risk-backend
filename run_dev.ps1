@@ -1,12 +1,14 @@
-# Development server runner
-Write-Host "🚀 Starting Credit Risk Backend Development Server..." -ForegroundColor Green
-Write-Host ""
+﻿# Run backend from monorepo root
+$backendPath = Join-Path $PSScriptRoot "apps/backend"
+Set-Location $backendPath
 
-# Navigate to project directory
-Set-Location "d:\GitHub\credit-risk-backend"
+$pythonFromRootVenv = Join-Path $PSScriptRoot ".venv/Scripts/python.exe"
+$pythonFromBackendVenv = Join-Path $backendPath ".venv/Scripts/python.exe"
 
-# Activate venv and run server
-& ".venv/Scripts/python.exe" -m uvicorn app.main:app --reload
-
-Write-Host ""
-Write-Host "✅ Server stopped" -ForegroundColor Green
+if (Test-Path $pythonFromRootVenv) {
+    & $pythonFromRootVenv -m uvicorn app.main:app --reload
+} elseif (Test-Path $pythonFromBackendVenv) {
+    & $pythonFromBackendVenv -m uvicorn app.main:app --reload
+} else {
+    python -m uvicorn app.main:app --reload
+}
