@@ -1,0 +1,100 @@
+﻿AccountCodeAlternateKey,AccountDescription,AccountKey,AccountType,CustomMemberOptions,CustomMembers,Operator,ParentAccountCodeAlternateKey,ParentAccountKey,ValueType
+1,Balance Sheet,1,,,,~,,,Currency
+4,Net Income,47,Revenue,,,'+,,,Currency
+10,Assets,2,Assets,,,'+,1,1,Currency
+20,Liabilities and Owners Equity,25,Liabilities,,,'-,1,1,Currency
+40,Operating Profit,48,Revenue,,,'+,4,47,Currency
+60,Operating Expenses,58,Expenditures,,,'-,40,48,Currency
+80,Other Income and Expense,88,Revenue,,,'+,4,47,Currency
+110,Current Assets,3,Assets,,,'+,10,2,Currency
+210,Liabilities,26,Liabilities,,,'+,20,25,Currency
+300,Owners Equity,41,Liabilities,,,'+,20,25,Currency
+400,Gross Margin,49,Revenue,,,'+,40,48,Currency
+600,Labor Expenses,59,Expenditures,,,'+,60,58,Currency
+620,Travel Expenses,64,Expenditures,,,'+,60,58,Currency
+630,Marketing,70,Expenditures,,,'+,60,58,Currency
+660,Telephone and Utilities,75,Expenditures,,,'+,60,58,Currency
+680,Depreciation,79,Expenditures,,,'+,60,58,Currency
+1110,Cash,4,Assets,,,'+,110,3,Currency
+1120,Receivables,5,Assets,,,'+,110,3,Currency
+1130,Trade Receivables,6,Assets,,,'+,1120,5,Currency
+1140,Other Receivables,7,Assets,,,'+,1120,5,Currency
+1150,Allowance for Bad Debt,8,Assets,,,'+,110,3,Currency
+1160,Inventory,9,Assets,,,'+,110,3,Currency
+1162,Raw Materials,10,Assets,,,'+,1160,9,Currency
+1164,Work in Process,11,Assets,,,'+,1160,9,Currency
+1166,Finished Goods,12,Assets,,,'+,1160,9,Currency
+1170,Deferred Taxes,13,Assets,,,'+,110,3,Currency
+1180,Prepaid Expenses,14,Assets,,,'+,110,3,Currency
+1185,Intercompany Receivables,15,Assets,,,'+,110,3,Currency
+1200,"Property, Plant, Equipment",17,Assets,,,'+,10,2,Currency
+1210,Land & Improvements,18,Assets,,,'+,1200,17,Currency
+1220,Buildings & Improvements,19,Assets,,,'+,1200,17,Currency
+1230,Machinery & Equipment,20,Assets,,,'+,1200,17,Currency
+1240,Office Furniture & Equipment,21,Assets,,,'+,1200,17,Currency
+1250,Leasehold Improvements,22,Assets,,,'+,1200,17,Currency
+1260,Construction In Progress,23,Assets,,,'+,1200,17,Currency
+1300,Other Assets,24,Assets,,,'+,10,2,Currency
+2200,Current Liabilities,27,Liabilities,,,'+,210,26,Currency
+2210,Notes Payable,28,Liabilities,,,'+,2200,27,Currency
+2220,Current Installments of Long-term Debt,100,Liabilities,,,'+,2200,27,Currency
+2230,Accounts Payable,29,Liabilities,,,'+,2200,27,Currency
+2300,Accrued Expenses,30,Liabilities,,,'+,2200,27,Currency
+2310,Salary & Other Comp,31,Liabilities,,,'+,2300,30,Currency
+2320,Insurance,32,Liabilities,,,'+,2300,30,Currency
+2330,Warranties,33,Liabilities,,,'+,2300,30,Currency
+2340,Intercompany Payables,34,Liabilities,,,'+,2200,27,Currency
+2350,Other Current Liabilities,35,Liabilities,,,'+,2200,27,Currency
+2400,Long Term Liabilities,36,Liabilities,,,'+,210,26,Currency
+2410,Long Term Obligations,37,Liabilities,,,'+,2400,36,Currency
+2420,Pension Liability,38,Liabilities,,,'+,2400,36,Currency
+2430,Other Retirement Benefits,39,Liabilities,,,'+,2400,36,Currency
+2440,Other Long Term Liabilities,40,Liabilities,,,'+,2400,36,Currency
+3010,Partner Capital,42,Liabilities,,,'+,300,41,Currency
+3020,Additional Paid In Capital,43,Liabilities,,,'+,300,41,Currency
+3030,Retained Earnings,44,Liabilities,,,'+,300,41,Currency
+3540,Prior Year Retained Earnings,45,Liabilities,,,'+,3030,44,Currency
+3550,Current Retained Earnings,46,Liabilities,,,'+,3030,44,Currency
+4100,Net Sales,50,Revenue,,,'+,400,49,Currency
+4110,Gross Sales,51,Revenue,,,'+,4100,50,Currency
+4130,Returns and Adjustments,53,Expenditures,,,'-,4100,50,Currency
+4140,Discounts,54,Expenditures,,,'-,4100,50,Currency
+4200,Trade Sales,101,Revenue,,,'+,4110,51,Currency
+4500,Intercompany Sales,52,Revenue,,,'+,4110,51,Currency
+5000,Total Cost of Sales,55,Expenditures,,,'-,400,49,Currency
+5020,Standard Cost of Sales,56,Expenditures,,,'+,5000,55,Currency
+5050,Variances,57,Expenditures,,,'+,5000,55,Currency
+6000,Salaries,60,Expenditures,,,'+,600,59,Currency
+6020,Payroll Taxes,61,Expenditures,,,'+,600,59,Currency
+6040,Employee Benefits,62,Expenditures,,,'+,600,59,Currency
+6100,Commissions,63,Expenditures,,,'+,60,58,Currency
+6200,Travel Transportation,65,Expenditures,,,'+,620,64,Currency
+6210,Travel Lodging,66,Expenditures,,,'+,620,64,Currency
+6220,Meals,67,Expenditures,,,'+,620,64,Currency
+6230,Entertainment,68,Expenditures,,,'+,620,64,Currency
+6240,Other Travel Related,69,Expenditures,,,'+,620,64,Currency
+6300,Conferences,71,Expenditures,,,'+,630,70,Currency
+6310,Marketing Collateral,72,Expenditures,,,'+,630,70,Currency
+6400,Office Supplies,73,Expenditures,,,'+,60,58,Currency
+6500,Professional Services,74,Expenditures,,,'+,60,58,Currency
+6610,Telephone,76,Expenditures,,,'+,660,75,Currency
+6620,Utilities,77,Expenditures,,,'+,660,75,Currency
+6700,Other Expenses,78,Expenditures,,,'+,60,58,Currency
+6810,Building Leasehold,80,Expenditures,,,'+,680,79,Currency
+6820,Vehicles,81,Expenditures,,,'+,680,79,Currency
+6830,Equipment,82,Expenditures,,,'+,680,79,Currency
+6840,Furniture and Fixtures,83,Expenditures,,,'+,680,79,Currency
+6850,Other Assets,84,Expenditures,,,'+,680,79,Currency
+6860,Amortization of Goodwill,85,Expenditures,,,'+,680,79,Currency
+6920,Rent,87,Expenditures,,,'+,60,58,Currency
+8000,Interest Income,89,Revenue,,,'+,80,88,Currency
+8010,Interest Expense,90,Expenditures,,,'-,80,88,Currency
+8020,Gain/Loss on Sales of Asset,91,Revenue,,,'+,80,88,Currency
+8030,Other Income,92,Revenue,,,'+,80,88,Currency
+8040,Curr Xchg Gain/(Loss),93,Revenue,,,'+,80,88,Currency
+8500,Taxes,94,Expenditures,,,'-,4,47,Currency
+9500,Statistical Accounts,95,Statistical,,,~,,,Units
+9510,Headcount,96,Balances,,,~,9500,95,Units
+9520,Units,97,Flow,,,~,9500,95,Units
+9530,Average Unit Price,98,Balances,,[Account].[Accounts].[Account Level 04].&[50]/[Account].[Accounts].[Account Level 02].&[97],~,9500,95,Currency
+9540,Square Footage,99,Balances,,,~,9500,95,Units
