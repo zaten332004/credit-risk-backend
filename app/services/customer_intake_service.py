@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import unicodedata
 
 import pandas as pd
-from sqlalchemy import desc, or_
+from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import selectinload
 
 from app.db.models import (
@@ -53,14 +53,41 @@ IMPORT_COLUMN_ALIASES: Dict[str, List[str]] = {
     "permanent_address": ["permanent_address"],
     "current_address": ["current_address", "address"],
     "occupation": ["occupation", "job_title", "profession"],
-    "monthly_income": ["monthly_income", "income", "salary"],
+    "monthly_income": [
+        "monthly_income",
+        "income",
+        "salary",
+        "thu_nhap",
+        "thu nhập",
+        "thu nhap",
+        "thunhap",
+    ],
     "credit_score": ["credit_score"],
     "application_ref_no": ["application_ref_no", "application_no", "loan_application_no"],
     "source_department_code": ["source_department_code", "department_code"],
     "source_branch_code": ["source_branch_code", "branch_code"],
     "application_date": ["application_date", "submitted_date"],
-    "loan_amount": ["loan_amount", "requested_loan_amount", "amount"],
-    "loan_term": ["loan_term", "loan_term_months", "term_months", "requested_term_months"],
+    "loan_amount": [
+        "loan_amount",
+        "requested_loan_amount",
+        "amount",
+        "so_tien_vay",
+        "số tiền vay",
+        "so tien vay",
+        "khoan_vay",
+        "khoản vay",
+    ],
+    "loan_term": [
+        "loan_term",
+        "loan_term_months",
+        "term_months",
+        "requested_term_months",
+        "ky_han",
+        "kỳ hạn",
+        "ky han",
+        "so_thang_vay",
+        "số tháng vay",
+    ],
     "interest_rate": ["interest_rate", "annual_interest_rate", "rate"],
     "loan_purpose": ["loan_purpose", "purpose"],
     "loan_type": ["loan_type"],
@@ -1056,16 +1083,46 @@ def _resolve_import_row(row: pd.Series, columns: Dict[str, str]) -> Dict[str, An
 def _validate_import_row(data: Dict[str, Any]) -> List[str]:
     errors: List[str] = []
     if not data["full_name"]:
-        errors.append("Thiếu full_name")
+        errors.append("Thiếu họ tên (full_name)")
     if data["monthly_income"] is None or data["monthly_income"] <= 0:
-        errors.append("monthly_income phải lớn hơn 0")
+        errors.append("monthly_income (thu nhập/tháng) phải có và lớn hơn 0")
     if data["loan_amount"] is None or data["loan_amount"] <= 0:
-        errors.append("loan_amount phải lớn hơn 0")
+        errors.append("loan_amount (số tiền vay) phải có và lớn hơn 0")
     if data["loan_term"] is None or data["loan_term"] <= 0:
         errors.append("loan_term phải lớn hơn 0")
     if data["loan_type"] == "secured" and not data["collateral_value"] and not data["collateral_id"]:
         errors.append("Hồ sơ thế chấp phải có collateral_id hoặc collateral_value")
     return errors
+
+
+def _categorize_import_row_failure(message: str) -> str:
+    """For UI breakdown: duplicate_* vs validation vs unexpected."""
+    m = (message or "").lower()
+    if "trùng id trong file" in m or "trùng mã khách hàng tham chiếu" in m:
+        return "duplicate_ref"
+    if "trùng email" in m:
+        return "duplicate_email"
+    if "trùng tên khách hàng" in m:
+        return "duplicate_name"
+    if (
+        "thiếu" in m
+        or "phải có và lớn hơn 0" in m
+        or "phải lớn hơn 0" in m
+        or "collateral" in m
+    ):
+        return "validation"
+    return "other"
+
+
+def _summarize_import_error_categories(errors: List[Dict[str, Any]]) -> Dict[str, int]:
+    keys = ("validation", "duplicate_ref", "duplicate_email", "duplicate_name", "other")
+    counts = {k: 0 for k in keys}
+    for entry in errors:
+        cat = str(entry.get("category") or _categorize_import_row_failure(str(entry.get("message") or "")))
+        if cat not in counts:
+            cat = "other"
+        counts[cat] += 1
+    return counts
 
 
 def _find_existing_customer(db: Any, data: Dict[str, Any]) -> Optional[CustomerDB]:
@@ -1164,7 +1221,13 @@ def import_customer_file(
             row_errors = _validate_import_row(data)
             if row_errors:
                 error_count += 1
-                import_errors.append({"row": row_index + 2, "message": "; ".join(row_errors)})
+                import_errors.append(
+                    {
+                        "row": row_index + 2,
+                        "message": "; ".join(row_errors),
+                        "category": "validation",
+                    }
+                )
                 continue
 
             try:
@@ -1284,7 +1347,14 @@ def import_customer_file(
             except Exception as exc:
                 db.rollback()
                 error_count += 1
-                import_errors.append({"row": row_index + 2, "message": str(exc)})
+                msg = str(exc)
+                import_errors.append(
+                    {
+                        "row": row_index + 2,
+                        "message": msg,
+                        "category": _categorize_import_row_failure(msg),
+                    }
+                )
 
         return {
             "processed_count": processed_count,
@@ -1293,6 +1363,7 @@ def import_customer_file(
             "imported_customers": imported_customers,
             "imported_applications": imported_applications,
             "import_errors": import_errors,
+            "error_reason_counts": _summarize_import_error_categories(import_errors),
         }
     finally:
         db.close()
