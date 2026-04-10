@@ -937,7 +937,8 @@ async def upload_data_endpoint(
             error_count=import_summary["error_count"] if import_summary else None,
             imported_customers=import_summary["imported_customers"] if import_summary else None,
             imported_applications=import_summary["imported_applications"] if import_summary else None,
-            import_errors=None,
+            import_errors=import_summary.get("import_errors") if import_summary else None,
+            error_reason_counts=import_summary.get("error_reason_counts") if import_summary else None,
             error=None,
         )
     except Exception as exc:

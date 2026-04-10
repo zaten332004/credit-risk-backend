@@ -1027,19 +1027,35 @@ def _read_dataframe(filename: str, content: bytes) -> pd.DataFrame:
 
 
 def _normalize_columns(df: pd.DataFrame) -> Dict[str, str]:
+    """Map normalized header -> original pandas column name (first occurrence)."""
     normalized_to_original: Dict[str, str] = {}
     for column in df.columns:
-        normalized = str(column).strip().lower()
+        normalized = " ".join(str(column).strip().lower().split())
         if normalized and normalized not in normalized_to_original:
             normalized_to_original[normalized] = str(column)
     return normalized_to_original
 
 
 def _pick_column(columns: Dict[str, str], field: str) -> Optional[str]:
+    """Match aliases to CSV headers (spaces, underscores, hyphens)."""
     for alias in IMPORT_COLUMN_ALIASES.get(field, [field]):
-        key = alias.strip().lower()
-        if key in columns:
-            return columns[key]
+        k = " ".join(alias.strip().lower().split())
+        if not k:
+            continue
+        variants = [
+            k,
+            k.replace(" ", "_"),
+            k.replace("_", " "),
+            k.replace("-", "_"),
+            k.replace("-", " "),
+            k.replace("-", "_").replace(" ", "_"),
+        ]
+        seen: set[str] = set()
+        for key in variants:
+            if key and key not in seen:
+                seen.add(key)
+                if key in columns:
+                    return columns[key]
     return None
 
 

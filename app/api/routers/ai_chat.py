@@ -727,6 +727,8 @@ async def ai_chat_upload_context_file(
         file_payload["processed_count"] = import_summary.get("processed_count")
         file_payload["success_count"] = import_summary.get("success_count")
         file_payload["error_count"] = import_summary.get("error_count")
+        file_payload["import_errors"] = import_summary.get("import_errors")
+        file_payload["error_reason_counts"] = import_summary.get("error_reason_counts")
 
     return {"uploaded_files": [file_payload]}
 

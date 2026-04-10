@@ -904,6 +904,7 @@ class UploadJobResponse(BaseModel):
     imported_customers: Optional[int] = None
     imported_applications: Optional[int] = None
     import_errors: Optional[List[Dict[str, Any]]] = None
+    error_reason_counts: Optional[Dict[str, int]] = None
     error: Optional[str] = None
 
 
