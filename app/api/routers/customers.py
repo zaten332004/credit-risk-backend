@@ -12,6 +12,7 @@ from app.schemas.schemas import (
     CustomerRead,
     CustomerSearchBody,
     CustomerUpdate,
+    MessageResponse,
     PaginatedCustomers,
     User,
 )
@@ -48,7 +49,11 @@ async def create_customer_endpoint(
     body: CustomerCreate,
     current_user: User = Depends(get_current_active_user),
 ) -> CustomerRead:
-    return customer_service.create_customer(body, created_by=current_user.email)
+    return customer_service.create_customer(
+        body,
+        created_by=current_user.email,
+        created_by_user_id=current_user.id,
+    )
 
 
 @router.put("/customers/{customer_id}", response_model=CustomerRead, tags=["customers"])
@@ -57,10 +62,26 @@ async def update_customer_endpoint(
     body: CustomerUpdate,
     current_user: User = Depends(get_current_active_user),
 ) -> CustomerRead:
-    updated = customer_service.update_customer(customer_id, body, updated_by=current_user.email)
+    updated = customer_service.update_customer(
+        customer_id,
+        body,
+        updated_by=current_user.email,
+        updated_by_user_id=current_user.id,
+    )
     if not updated:
         raise HTTPException(status_code=404, detail="Customer not found")
     return updated
+
+
+@router.delete("/customers/{customer_id}", response_model=MessageResponse, tags=["customers"])
+async def delete_customer_endpoint(
+    customer_id: int,
+    current_user: User = Depends(get_current_active_user),
+) -> MessageResponse:
+    deleted = customer_service.delete_customer(customer_id, deleted_by_user_id=current_user.id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return MessageResponse(message="Đã xóa hồ sơ khách hàng.")
 
 
 @router.get("/customers/{customer_id}/history", response_model=List[CustomerHistoryItem], tags=["customers"])

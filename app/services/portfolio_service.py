@@ -29,8 +29,25 @@ def compute_portfolio_kpi(date_from: Optional[str], date_to: Optional[str], segm
 
 def risk_distribution(group_by: Optional[str]) -> RiskDistributionResponse:
     buckets = {"low": 0.5, "medium": 0.3, "high": 0.2}
-    chart_data = [{"bucket": k, "value": v} for k, v in buckets.items()]
-    return RiskDistributionResponse(buckets=buckets, chart_data=chart_data)
+    chart_data = [
+        {"bucket": "low", "value": 0.5, "count": 50},
+        {"bucket": "medium", "value": 0.3, "count": 30},
+        {"bucket": "high", "value": 0.2, "count": 20},
+    ]
+    score_buckets = [
+        {"range": "0-20", "count": 5},
+        {"range": "20-40", "count": 10},
+        {"range": "40-60", "count": 25},
+        {"range": "60-80", "count": 35},
+        {"range": "80-100", "count": 25},
+    ]
+    score_stats = {"mean": 58.0, "median": 60.0, "std_dev": 18.5}
+    return RiskDistributionResponse(
+        buckets=buckets,
+        chart_data=chart_data,
+        score_buckets=score_buckets,
+        score_stats=score_stats,
+    )
 
 
 def concentration(top_n: int = 10) -> ConcentrationResponse:

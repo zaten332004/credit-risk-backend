@@ -120,10 +120,10 @@ def _format_ai_context_rows(
     if updated_at:
         lines.append(f"UpdatedAt: {updated_at}")
     if missing:
-        lines.append(f"[WARN] Missing AI_Context keys: {', '.join(missing)}")
+        lines.append(f"[WARN] Missing required keys on {table_name}: {', '.join(missing)}")
 
     if not kv:
-        lines.append("(AI_Context returned 0 rows)")
+        lines.append(f"({table_name} contract query returned 0 rows)")
         return "\n".join(lines)
 
     lines.append("Context:")
@@ -162,11 +162,14 @@ def _extract_names_from_rows(rows: List[dict], kind: str) -> List[str]:
         if not isinstance(row, dict):
             continue
         for key, value in row.items():
-            if not isinstance(value, str):
-                continue
             k = (key or "").lower()
-            if any(w in k for w in keywords):
-                out.append(value.strip())
+            if not any(w in k for w in keywords):
+                continue
+            if value is None:
+                continue
+            s = value.strip() if isinstance(value, str) else str(value).strip()
+            if s:
+                out.append(s)
     return _dedupe_keep_order(out)
 
 
@@ -202,11 +205,40 @@ def _extract_column_names(payload: Dict[str, Any]) -> List[str]:
     return _dedupe_keep_order(out)
 
 
-def _extract_manual_table_names_from_settings() -> List[str]:
+def _extract_manual_table_names(runtime_user: Optional[Any] = None) -> List[str]:
+    runtime_names = [
+        str(item).strip()
+        for item in (getattr(runtime_user, "power_bi_table_names", None) or [])
+        if str(item).strip()
+    ]
+
+    configured: List[str] = []
     raw = (getattr(settings, "power_bi_ai_context_tables", "") or "").strip()
-    if not raw:
-        return []
-    return _dedupe_keep_order([x.strip() for x in raw.split(",") if x.strip()])
+    if raw:
+        configured.extend([x.strip() for x in raw.split(",") if x.strip()])
+
+    default_table = (getattr(settings, "power_bi_ai_context_table", "") or "").strip()
+    if default_table:
+        configured.append(default_table)
+
+    return _dedupe_keep_order(runtime_names + configured)
+
+
+def _manual_table_names_for_probe(runtime_user: Optional[Any] = None) -> List[str]:
+    """
+    When sampling a user's workspace/dataset, only use UI hints (power_bi_table_names).
+    Do not merge global POWER_BI_AI_CONTEXT_TABLES / POWER_BI_AI_CONTEXT_TABLE — those
+    may refer to another semantic model and cause wrong probes or AI_Context-style fallbacks.
+    """
+    if runtime_user is not None:
+        return _dedupe_keep_order(
+            [
+                str(item).strip()
+                for item in (getattr(runtime_user, "power_bi_table_names", None) or [])
+                if str(item).strip()
+            ]
+        )
+    return _extract_manual_table_names(None)
 
 
 def _build_auto_table_candidates() -> List[str]:
@@ -274,12 +306,23 @@ def _format_all_tables_context(
     all_samples: List[Tuple[str, List[dict], List[Tuple[str, str]]]],
     max_chars: int,
 ) -> str:
+    deduped_samples: List[Tuple[str, List[dict], List[Tuple[str, str]]]] = []
+    seen_tables: set[str] = set()
+    for table_name, rows, aliases in all_samples:
+        normalized = (table_name or "").strip().lower()
+        if not normalized or normalized in seen_tables:
+            continue
+        seen_tables.add(normalized)
+        deduped_samples.append((table_name, rows, aliases))
+
     lines: List[str] = ["--- Power BI (all tables) ---"]
-    if not all_samples:
+    if deduped_samples:
+        lines.append("Tables available: " + ", ".join(table_name for table_name, _, _ in deduped_samples))
+    if not deduped_samples:
         lines.append("(No readable table samples found)")
         return "\n".join(lines)
 
-    for table_name, rows, aliases in all_samples:
+    for table_name, rows, aliases in deduped_samples:
         lines.append(f"\nTable: {table_name} (sample_rows={len(rows)})")
         if not rows:
             lines.append("- (no rows)")
@@ -315,6 +358,7 @@ def _strip_table_prefix(key: str) -> str:
 
 def _sample_table_rows(
     powerbi_service,
+    runtime_user: Optional[Any],
     table_name: str,
     max_rows: int,
     max_columns: int,
@@ -331,7 +375,10 @@ def _sample_table_rows(
 
     # Strategy 1: direct table sampling (works for many models).
     dax = f"EVALUATE TOPN({max_rows}, '{t}')"
-    resp = powerbi_service.execute_dax_query_global_verbose(dax)
+    if runtime_user is not None:
+        resp = powerbi_service.execute_dax_query_verbose(runtime_user, dax)
+    else:
+        resp = powerbi_service.execute_dax_query_global_verbose(dax)
     if resp.get("ok"):
         rows = _extract_execute_queries_rows(resp.get("result") or {})
         rows = _limit_row_columns(rows, max_columns=max_columns)
@@ -339,7 +386,10 @@ def _sample_table_rows(
         return True, rows, aliases, None
 
     # Strategy 2: discover columns, then SELECTCOLUMNS with deterministic aliases.
-    columns_resp = powerbi_service.get_table_columns_global_verbose(table_name)
+    if runtime_user is not None:
+        columns_resp = powerbi_service.get_table_columns_verbose(runtime_user, table_name)
+    else:
+        columns_resp = powerbi_service.get_table_columns_global_verbose(table_name)
     if not columns_resp.get("ok"):
         reason = str(resp.get("error") or resp.get("body") or "table sample failed")
         reason2 = str(columns_resp.get("error") or columns_resp.get("body") or "column discovery failed")
@@ -356,7 +406,10 @@ def _sample_table_rows(
     except Exception as e:
         return False, [], [], f"cannot build sample query: {str(e)}"
 
-    resp2 = powerbi_service.execute_dax_query_global_verbose(dax2)
+    if runtime_user is not None:
+        resp2 = powerbi_service.execute_dax_query_verbose(runtime_user, dax2)
+    else:
+        resp2 = powerbi_service.execute_dax_query_global_verbose(dax2)
     if not resp2.get("ok"):
         reason = str(resp2.get("error") or resp2.get("body") or "SELECTCOLUMNS sample failed")
         return False, [], [], reason
@@ -379,7 +432,20 @@ def _limit_row_columns(rows: List[dict], max_columns: int) -> List[dict]:
     return trimmed
 
 
-def _get_all_tables_context_from_powerbi(powerbi_service) -> str:
+def _powerbi_schema_attempt_hints(tables_resp: Dict[str, Any]) -> str:
+    """Lấy message/body từ từng bước DAX/REST để AI và admin thấy lỗi thật từ Power BI."""
+    lines: List[str] = []
+    for att in (tables_resp.get("attempts") or [])[:8]:
+        if not isinstance(att, dict):
+            continue
+        stage = att.get("stage") or "?"
+        body = att.get("body") or att.get("error")
+        if body and str(body).strip():
+            lines.append(f"- {stage}: {str(body).strip()[:500]}")
+    return "\n".join(lines) if lines else ""
+
+
+def _get_all_tables_context_from_powerbi(powerbi_service, runtime_user: Optional[Any] = None) -> str:
     max_chars = _safe_int(getattr(settings, "power_bi_ai_context_max_chars", 4000)) or 4000
     max_tables = _safe_int(getattr(settings, "power_bi_ai_context_max_tables", 12)) or 12
     max_columns = _safe_int(getattr(settings, "power_bi_ai_context_max_columns", 8)) or 8
@@ -389,16 +455,43 @@ def _get_all_tables_context_from_powerbi(powerbi_service) -> str:
     max_columns = max(1, max_columns)
     max_rows = max(1, min(max_rows, 50))  # avoid oversized prompt/query
 
-    tables_resp = powerbi_service.get_dataset_tables_global_verbose()
+    if runtime_user is not None:
+        tables_resp = powerbi_service.get_dataset_tables_verbose(runtime_user)
+    else:
+        tables_resp = powerbi_service.get_dataset_tables_global_verbose()
     table_names: List[str] = []
     if tables_resp.get("ok"):
         table_names = _extract_table_names(tables_resp.get("result") or {})
-    else:
-        table_names = _extract_manual_table_names_from_settings()
         if not table_names:
-            table_names = _build_auto_table_candidates()
+            tables_resp = {
+                **tables_resp,
+                "ok": False,
+                "error": "Không parse được tên bảng từ phản hồi Power BI.",
+            }
+
+    if not tables_resp.get("ok"):
+        if runtime_user is not None:
+            table_names = _manual_table_names_for_probe(runtime_user)
             if not table_names:
-                table_name = (settings.power_bi_ai_context_table or "AI_Context").strip() or "AI_Context"
+                hints = _powerbi_schema_attempt_hints(tables_resp)
+                detail = (tables_resp.get("body") or tables_resp.get("error") or "").strip()
+                msg = (
+                    "--- Power BI (all tables) ---\n"
+                    "Không đọc được danh sách bảng từ dataset (workspace/dataset của người dùng). "
+                    "Kiểm tra: Service Principal là thành viên workspace, quyền Build trên dataset, "
+                    "và app registration có quyền Dataset.Read.All (hoặc tương đương).\n"
+                )
+                if detail:
+                    msg += f"Tóm tắt lỗi: {detail[:600]}\n"
+                if hints:
+                    msg += "Chi tiết từng bước schema:\n" + hints + "\n"
+                return msg + json.dumps(tables_resp, ensure_ascii=False)[:1200]
+        else:
+            table_names = _extract_manual_table_names(None)
+            if not table_names:
+                table_names = _build_auto_table_candidates()
+            if not table_names:
+                table_name = (settings.power_bi_ai_context_table or "LoanPortfolio").strip() or "LoanPortfolio"
                 escaped_table = table_name.replace("'", "''")
                 fallback_dax = f"EVALUATE TOPN({max_rows}, '{escaped_table}', '{escaped_table}'[Key], ASC)"
                 fallback_result = powerbi_service.execute_dax_query_global_verbose(fallback_dax)
@@ -416,13 +509,14 @@ def _get_all_tables_context_from_powerbi(powerbi_service) -> str:
                 return (
                     "--- Power BI (all tables) ---\n"
                     "Cannot discover tables and no automatic candidates available.\n"
-                    "Checked AI_Context contract fallback automatically.\n"
-                    "Optional override only if needed: POWER_BI_AI_CONTEXT_TABLES=TableA,TableB,...\n"
+                    f"Checked contract-table fallback ({table_name}) automatically.\n"
+                    "Optional override: POWER_BI_AI_CONTEXT_TABLES=CustomerMaster,LoanPortfolio,...\n"
                     + json.dumps(tables_resp, ensure_ascii=False)[:1200]
                 )
 
     if not table_names:
         return "--- Power BI (all tables) ---\n(No tables discovered from dataset)"
+    table_names = _dedupe_keep_order(table_names)
 
     samples: List[Tuple[str, List[dict], List[Tuple[str, str]]]] = []
     failed_tables: List[Tuple[str, str]] = []
@@ -431,6 +525,7 @@ def _get_all_tables_context_from_powerbi(powerbi_service) -> str:
             break
         ok, rows, aliases, error = _sample_table_rows(
             powerbi_service,
+            runtime_user,
             table_name=table_name,
             max_rows=max_rows,
             max_columns=max_columns,
@@ -442,8 +537,23 @@ def _get_all_tables_context_from_powerbi(powerbi_service) -> str:
         samples.append((table_name, rows, aliases))
 
     if not samples:
-        # Automatic fallback: try contract table before requiring manual table list.
-        table_name = (settings.power_bi_ai_context_table or "AI_Context").strip() or "AI_Context"
+        if runtime_user is not None:
+            debug_lines: List[str] = []
+            if failed_tables:
+                for name, reason in failed_tables[:10]:
+                    debug_lines.append(f"- {name}: {reason[:180]}")
+            preview = ", ".join(table_names[:40])
+            if len(table_names) > 40:
+                preview += f" … (+{len(table_names) - 40} bảng)"
+            return (
+                "--- Power BI (all tables) ---\n"
+                f"Dataset có {len(table_names)} bảng nhưng không lấy được mẫu dòng (DAX/cột). "
+                "Không dùng bảng contract (Key/TextValue) từ .env vì có thể không thuộc dataset này.\n"
+                f"Tên bảng: {preview}\n"
+                + ("Lỗi theo bảng:\n" + "\n".join(debug_lines) if debug_lines else "")
+            )
+
+        table_name = (settings.power_bi_ai_context_table or "LoanPortfolio").strip() or "LoanPortfolio"
         escaped_table = table_name.replace("'", "''")
         fallback_dax = f"EVALUATE TOPN({max_rows}, '{escaped_table}', '{escaped_table}'[Key], ASC)"
         fallback_result = powerbi_service.execute_dax_query_global_verbose(fallback_dax)
@@ -459,15 +569,15 @@ def _get_all_tables_context_from_powerbi(powerbi_service) -> str:
                     max_chars=max_chars,
                 )
 
-        debug_lines: List[str] = []
+        debug_lines_global: List[str] = []
         if failed_tables:
             for name, reason in failed_tables[:5]:
-                debug_lines.append(f"- {name}: {reason[:180]}")
+                debug_lines_global.append(f"- {name}: {reason[:180]}")
         return (
             "--- Power BI (all tables) ---\n"
             "Auto-probe did not find readable tables.\n"
-            "Checked direct table sampling, column-based fallback, and AI_Context contract fallback automatically.\n"
-            + ("\n".join(debug_lines) if debug_lines else "No detailed diagnostics available.")
+            f"Checked direct sampling, column fallback, and contract table ({table_name}) fallback.\n"
+            + ("\n".join(debug_lines_global) if debug_lines_global else "No detailed diagnostics available.")
         )
 
     return _format_all_tables_context(samples, max_chars=max_chars)
@@ -643,7 +753,7 @@ def get_analysis_context(
     return "\n".join(parts)
 
 
-def get_analysis_context_powerbi() -> str:
+def get_analysis_context_powerbi(runtime_user: Optional[Any] = None) -> str:
     """
     Collect context directly from Power BI (via REST API + service principal).
 
@@ -657,35 +767,47 @@ def get_analysis_context_powerbi() -> str:
     try:
         from app.services.powerbi_service import powerbi_service
 
-        if not (
+        # Tenant may come from .env when user file has empty tenant_id; token resolution handles that.
+        has_runtime_user = bool(
+            runtime_user
+            and (getattr(runtime_user, "power_bi_workspace_id", None) or "").strip()
+            and (getattr(runtime_user, "power_bi_dataset_id", None) or "").strip()
+        )
+        has_global_config = bool(
             (settings.power_bi_tenant_id or "").strip()
             and (settings.power_bi_client_id or "").strip()
             and (settings.power_bi_client_secret or "").strip()
             and (settings.power_bi_workspace_id or "").strip()
             and (settings.power_bi_dataset_id or "").strip()
-        ):
+        )
+        if not has_runtime_user and not has_global_config:
             return (
                 "Power BI chưa được cấu hình cho backend. "
                 "Hãy set POWER_BI_TENANT_ID/CLIENT_ID/CLIENT_SECRET/WORKSPACE_ID/DATASET_ID trong .env."
             )
 
+        mode = (getattr(settings, "power_bi_ai_context_mode", "all_tables") or "all_tables").strip().lower()
+        # all_tables: always sample the configured dataset; ignore POWER_BI_AI_CONTEXT_DAX so a stale
+        # AI_Context DAX in .env cannot bypass real table sampling.
+        if mode in {"all_tables", "all"}:
+            return _get_all_tables_context_from_powerbi(powerbi_service, runtime_user=runtime_user)
+
         dax = (settings.power_bi_ai_context_dax or "").strip()
         if not dax:
-            mode = (getattr(settings, "power_bi_ai_context_mode", "all_tables") or "all_tables").strip().lower()
-            if mode in {"all_tables", "all"}:
-                return _get_all_tables_context_from_powerbi(powerbi_service)
-
-            # contract_table mode: use fixed AI_Context contract table
-            table_name = (settings.power_bi_ai_context_table or "AI_Context").strip() or "AI_Context"
+            # contract_table mode: fixed hub table (default LoanPortfolio, override via POWER_BI_AI_CONTEXT_TABLE)
+            table_name = (settings.power_bi_ai_context_table or "LoanPortfolio").strip() or "LoanPortfolio"
             max_rows = int(getattr(settings, "power_bi_ai_context_max_rows", 200) or 200)
             if max_rows <= 0:
                 max_rows = 200
             escaped_table = table_name.replace("'", "''")
             dax = f"EVALUATE TOPN({max_rows}, '{escaped_table}', '{escaped_table}'[Key], ASC)"
 
-        result = powerbi_service.execute_dax_query_global_verbose(dax)
+        if runtime_user is not None:
+            result = powerbi_service.execute_dax_query_verbose(runtime_user, dax)
+        else:
+            result = powerbi_service.execute_dax_query_global_verbose(dax)
         if result.get("ok"):
-            table_name = (settings.power_bi_ai_context_table or "AI_Context").strip() or "AI_Context"
+            table_name = (settings.power_bi_ai_context_table or "LoanPortfolio").strip() or "LoanPortfolio"
             required_raw = (settings.power_bi_ai_context_required_keys or "").strip()
             required_keys = [k.strip() for k in required_raw.split(",") if k.strip()]
             max_chars = _safe_int(getattr(settings, "power_bi_ai_context_max_chars", 4000)) or 4000
@@ -699,7 +821,7 @@ def get_analysis_context_powerbi() -> str:
             + json.dumps(result, ensure_ascii=False)[:1200]
             + "\n\n"
             "Hint: set POWER_BI_AI_CONTEXT_MODE=all_tables to sample all dataset tables, "
-            "or POWER_BI_AI_CONTEXT_MODE=contract_table to use fixed AI_Context."
+            "or POWER_BI_AI_CONTEXT_MODE=contract_table to use POWER_BI_AI_CONTEXT_TABLE (e.g. LoanPortfolio)."
         )
     except Exception as e:
         logger.warning("get_analysis_context_powerbi failed: %s", e)

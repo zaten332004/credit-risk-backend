@@ -1,6 +1,6 @@
 # 🏦 Credit Risk Backend - Intelligent Financial Risk Analysis System
 
-A comprehensive financial risk analysis system with AI-powered chatbot, loan management, portfolio analysis, and compliance tracking. Built with FastAPI, SQL Server, and Google Gemini AI.
+A comprehensive financial risk analysis system with AI-powered chatbot, loan management, portfolio analysis, and compliance tracking. Built with FastAPI, MySQL, and Google Gemini AI.
 
 ---
 
@@ -50,7 +50,7 @@ A comprehensive financial risk analysis system with AI-powered chatbot, loan man
 
 ### **Prerequisites**
 - Python 3.9+
-- SQL Server 2019+ (or compatible)
+- MySQL 8.0+
 - Google Gemini API Key
 - PowerShell 5.1+ (for Windows)
 
@@ -75,7 +75,7 @@ A comprehensive financial risk analysis system with AI-powered chatbot, loan man
 
 4. **Configure Environment Variables**
    ```powershell
-   $env:DATABASE_URL = "mssql+pyodbc://username:password@server/database?driver=ODBC+Driver+17+for+SQL+Server"
+   $env:DATABASE_URL = "mysql+pymysql://username:password@localhost:3306/CreditRiskDB?charset=utf8mb4"
    $env:GEMINI_API_KEY = "your-gemini-api-key"
    $env:SECRET_KEY = "your-jwt-secret-key"
    ```
@@ -120,10 +120,9 @@ A comprehensive financial risk analysis system with AI-powered chatbot, loan man
 - `GET /ai-chat/context-preview` - Preview analysis context (db/powerbi)
 - `GET /ai-chat/report/{session_id}` - Generate analysis report
 
-> Note (SQL Server Unicode): if Vietnamese text is saved as `????` in chat history, ensure
-> `Chat_History.message` and `Chat_History.bot_response` are `NVARCHAR` (see `scripts/sqlserver_fix_chat_history_unicode.sql`).
+> Note (MySQL): import `docs/database/Database_MySQL_V1.sql` for the canonical schema and seed data.
 
-> Note (Pinned sessions): run `scripts/sqlserver_create_chat_session_pin.sql` to enable pin/unpin without changing `Chat_Session`.
+> Note (Legacy SQL Server helpers): `scripts/sqlserver_*.sql` are retained only for reference.
 
 ### **Loan Management** (`/api/v1/loan`)
 - `POST /loan/apply` - Apply for loan
@@ -295,7 +294,7 @@ credit-risk-backend/
 
 ```env
 # Database
-DATABASE_URL=mssql+pyodbc://user:pass@server/db?driver=ODBC+Driver+17+for+SQL+Server
+DATABASE_URL=mysql+pymysql://user:pass@localhost:3306/CreditRiskDB?charset=utf8mb4
 
 # API
 API_V1_PREFIX=/api/v1

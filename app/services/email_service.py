@@ -15,6 +15,9 @@ from app.core.config import settings
 class EmailService:
     """Service for sending emails"""
 
+    SMTP_TIMEOUT_SECONDS = 8
+    MAILGUN_TIMEOUT_SECONDS = 8
+
     @staticmethod
     def send_verification_email(
         recipient_email: str,
@@ -28,7 +31,7 @@ class EmailService:
         Args:
             recipient_email: Email to send to
             verification_token: Token for verification
-            verification_url: Full URL including token (e.g., http://localhost:8000/api/v1/auth/register/verify-email?token=xxx)
+            verification_url: Full frontend URL including token (e.g., http://localhost:3000/auth/verify-email?token=xxx)
             full_name: User's full name (optional)
         
         Returns:
@@ -99,14 +102,112 @@ Credit Risk Management System
             )
             
         except Exception as e:
-            print(f"❌ Error sending verification email: {str(e)}")
+            print(f"[EMAIL_ERROR] Error sending verification email: {str(e)}")
+            return False
+
+    @staticmethod
+    def send_email_change_code(
+        recipient_email: str,
+        verification_code: str,
+        full_name: str | None = None,
+    ) -> bool:
+        try:
+            subject = "Email Change Verification Code - Credit Risk Management System"
+
+            html_body = f"""
+            <html>
+                <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                    <div style="max-width: 600px; margin: 0 auto; border: 1px solid #ddd; padding: 20px; border-radius: 5px;">
+                        <h2 style="color: #2c3e50;">Email Change Verification</h2>
+                        <p>Hello {full_name or 'User'},</p>
+                        <p>Use the verification code below to confirm your new email address:</p>
+                        <div style="margin: 30px 0; text-align: center;">
+                            <div style="display: inline-block; letter-spacing: 6px; font-size: 28px; font-weight: bold; padding: 12px 18px; background-color: #f5f7fb; border-radius: 8px; border: 1px solid #d7e0ef;">
+                                {verification_code}
+                            </div>
+                        </div>
+                        <p style="color: #666; font-size: 12px;">This code will expire in 10 minutes. If you did not request this change, please ignore this email.</p>
+                    </div>
+                </body>
+            </html>
+            """
+
+            text_body = f"""
+Email Change Verification
+
+Hello {full_name or 'User'},
+
+Use this verification code to confirm your new email address:
+
+{verification_code}
+
+This code will expire in 10 minutes. If you did not request this change, please ignore this email.
+            """
+
+            return EmailService._send_email(
+                recipient_email=recipient_email,
+                subject=subject,
+                html_body=html_body,
+                text_body=text_body,
+            )
+        except Exception as e:
+            print(f"[EMAIL_ERROR] Error sending email change code: {str(e)}")
+            return False
+
+    @staticmethod
+    def send_password_reset_code(
+        recipient_email: str,
+        verification_code: str,
+        full_name: str | None = None,
+    ) -> bool:
+        try:
+            subject = "Password Reset Verification Code - Credit Risk Management System"
+
+            html_body = f"""
+            <html>
+                <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                    <div style="max-width: 600px; margin: 0 auto; border: 1px solid #ddd; padding: 20px; border-radius: 5px;">
+                        <h2 style="color: #2c3e50;">Password Reset</h2>
+                        <p>Hello {full_name or 'User'},</p>
+                        <p>Use the verification code below to reset your password:</p>
+                        <div style="margin: 30px 0; text-align: center;">
+                            <div style="display: inline-block; letter-spacing: 6px; font-size: 28px; font-weight: bold; padding: 12px 18px; background-color: #f5f7fb; border-radius: 8px; border: 1px solid #d7e0ef;">
+                                {verification_code}
+                            </div>
+                        </div>
+                        <p style="color: #666; font-size: 12px;">This code will expire in 10 minutes. If you did not request a password reset, please ignore this email.</p>
+                    </div>
+                </body>
+            </html>
+            """
+
+            text_body = f"""
+Password Reset
+
+Hello {full_name or 'User'},
+
+Use this verification code to reset your password:
+
+{verification_code}
+
+This code will expire in 10 minutes. If you did not request a password reset, please ignore this email.
+            """
+
+            return EmailService._send_email(
+                recipient_email=recipient_email,
+                subject=subject,
+                html_body=html_body,
+                text_body=text_body,
+            )
+        except Exception as e:
+            print(f"[EMAIL_ERROR] Error sending password reset code: {str(e)}")
             return False
 
     @staticmethod
     def send_registration_approved_email(
         recipient_email: str,
         full_name: str | None = None,
-        login_url: str = "http://localhost:8000/docs"
+        login_url: str = "http://localhost:3000/auth?mode=login"
     ) -> bool:
         """Send email notifying user registration was approved"""
         try:
@@ -161,7 +262,7 @@ Credit Risk Management System
             )
             
         except Exception as e:
-            print(f"❌ Error sending approval email: {str(e)}")
+            print(f"[EMAIL_ERROR] Error sending approval email: {str(e)}")
             return False
 
     @staticmethod
@@ -227,7 +328,7 @@ Credit Risk Management System
             )
             
         except Exception as e:
-            print(f"❌ Error sending rejection email: {str(e)}")
+            print(f"[EMAIL_ERROR] Error sending rejection email: {str(e)}")
             return False
 
     @staticmethod
@@ -253,14 +354,14 @@ Credit Risk Management System
             elif backend == "smtp":
                 return EmailService._send_smtp(recipient_email, subject, html_body, text_body)
             else:  # console (demo mode)
-                print(f"\n📧 [DEMO MODE] Email notification:")
+                print("\n[DEMO MODE] Email notification:")
                 print(f"   To: {recipient_email}")
                 print(f"   Subject: {subject}")
                 print(f"   Body: {text_body[:100]}...")
                 return True
                 
         except Exception as e:
-            print(f"❌ Email Error: {str(e)}")
+            print(f"[EMAIL_ERROR] Email error: {str(e)}")
             return False
     
     @staticmethod
@@ -276,8 +377,8 @@ Credit Risk Management System
             domain = getattr(settings, 'MAILGUN_DOMAIN', '')
             
             if not api_key or not domain:
-                print("⚠️  Mailgun API key or domain not configured. Falling back to console mode.")
-                print(f"📧 [CONSOLE] Email to {recipient_email}: {subject}")
+                print("[EMAIL_WARN] Mailgun API key or domain not configured. Falling back to console mode.")
+                print(f"[CONSOLE] Email to {recipient_email}: {subject}")
                 return True
             
             return requests.post(
@@ -289,11 +390,12 @@ Credit Risk Management System
                     "subject": subject,
                     "text": text_body,
                     "html": html_body
-                }
+                },
+                timeout=EmailService.MAILGUN_TIMEOUT_SECONDS,
             ).status_code == 200
             
         except Exception as e:
-            print(f"❌ Mailgun Error: {str(e)}")
+            print(f"[EMAIL_ERROR] Mailgun error: {str(e)}")
             return False
     
     @staticmethod
@@ -312,8 +414,8 @@ Credit Risk Management System
             from_email = getattr(settings, 'SMTP_FROM', 'noreply@creditrisk.com')
             
             if not smtp_user or not smtp_password:
-                print("⚠️  SMTP credentials not configured. Falling back to console mode.")
-                print(f"📧 [CONSOLE] Email to {recipient_email}: {subject}")
+                print("[EMAIL_WARN] SMTP credentials not configured. Falling back to console mode.")
+                print(f"[CONSOLE] Email to {recipient_email}: {subject}")
                 return True
             
             msg = MIMEMultipart('alternative')
@@ -324,14 +426,19 @@ Credit Risk Management System
             msg.attach(MIMEText(text_body, 'plain'))
             msg.attach(MIMEText(html_body, 'html'))
             
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
+            with smtplib.SMTP(
+                smtp_server,
+                smtp_port,
+                timeout=EmailService.SMTP_TIMEOUT_SECONDS,
+            ) as server:
                 server.starttls()
                 server.login(smtp_user, smtp_password)
                 server.send_message(msg)
             
-            print(f"✅ Email sent to {recipient_email}")
+            print(f"[EMAIL_OK] Email sent to {recipient_email}")
             return True
             
         except Exception as e:
-            print(f"❌ SMTP Error: {str(e)}")
+            print(f"[EMAIL_ERROR] SMTP error: {str(e)}")
             return False
+

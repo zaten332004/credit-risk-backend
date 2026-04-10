@@ -23,8 +23,8 @@ class ManagerUpgradeService:
         analyst = db.query(UserDB).filter(UserDB.user_id == analyst_user_id).first()
         if not analyst:
             raise ValueError("User not found")
-        if not ManagerUpgradeService._is_role(db, analyst.role_id, "analyst"):
-            raise ValueError("Only analyst can create manager upgrade request")
+        if not ManagerUpgradeService._is_role(db, analyst.role_id, "risk analyst"):
+            raise ValueError("Only risk analyst can create manager upgrade request")
         if ManagerUpgradeService._has_pending_request(db, analyst_user_id):
             raise ValueError("User already has a pending manager upgrade request")
 
@@ -32,7 +32,7 @@ class ManagerUpgradeService:
             target_user_id=analyst_user_id,
             purpose=purpose,
             status="pending",
-            requested_by_role="analyst",
+            requested_by_role="risk analyst",
             nominated_by=None,
         )
         db.add(req)
@@ -53,11 +53,11 @@ class ManagerUpgradeService:
         if not manager or not ManagerUpgradeService._is_role(db, manager.role_id, "manager"):
             raise ValueError("Only manager can nominate analyst")
         if not analyst:
-            raise ValueError("Analyst user not found")
-        if not ManagerUpgradeService._is_role(db, analyst.role_id, "analyst"):
-            raise ValueError("Only analyst can be nominated")
+            raise ValueError("Risk analyst user not found")
+        if not ManagerUpgradeService._is_role(db, analyst.role_id, "risk analyst"):
+            raise ValueError("Only risk analyst can be nominated")
         if ManagerUpgradeService._has_pending_request(db, analyst_user_id):
-            raise ValueError("Analyst already has a pending manager upgrade request")
+            raise ValueError("Risk analyst already has a pending manager upgrade request")
 
         req = ManagerUpgradeRequestDB(
             target_user_id=analyst_user_id,
@@ -239,7 +239,13 @@ class ManagerUpgradeService:
         if role_id is None:
             return False
         role = db.query(RoleDB).filter(RoleDB.role_id == role_id).first()
-        return bool(role and (role.role_name or "").lower() == role_name.lower())
+        if not role:
+            return False
+        current = (role.role_name or "").strip().lower()
+        expected = (role_name or "").strip().lower()
+        if expected in {"analyst", "risk analyst"}:
+            return current in {"analyst", "risk analyst"}
+        return current == expected
 
     @staticmethod
     def _has_pending_request(db: Session, target_user_id: int) -> bool:

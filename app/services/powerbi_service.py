@@ -5,6 +5,7 @@ Handles multi-workspace Power BI connections and data retrieval
 import os
 import json
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
@@ -13,7 +14,6 @@ from functools import lru_cache
 import requests
 from sqlalchemy.orm import Session
 
-from app.db.models import UserDB
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -34,6 +34,92 @@ class PowerBIService:
         """Initialize Power BI Service"""
         self.base_url = self.POWER_BI_API_BASE
         self.token_cache: Dict[str, tuple] = {}  # {user_id: (token, expiry)}
+        self._config_dir = Path(__file__).resolve().parents[2] / ".powerbi_user_configs"
+
+    def _get_user_id(self, user: Any) -> str:
+        value = getattr(user, "user_id", None) or getattr(user, "id", None)
+        if value is None:
+            raise ValueError("Missing user id for Power BI config")
+        return str(value)
+
+    def _config_path(self, user: Any) -> Path:
+        return self._config_dir / f"{self._get_user_id(user)}.json"
+
+    def _load_user_config(self, user: Any) -> Dict[str, Any]:
+        path = self._config_path(user)
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def get_runtime_user(self, user: Any) -> Any:
+        config = self._load_user_config(user)
+        last_sync = None
+        raw_last_sync = config.get("power_bi_last_sync")
+        if isinstance(raw_last_sync, str) and raw_last_sync.strip():
+            try:
+                last_sync = datetime.fromisoformat(raw_last_sync)
+            except Exception:
+                last_sync = None
+
+        return SimpleNamespace(
+            user_id=getattr(user, "user_id", None) or getattr(user, "id", None),
+            id=getattr(user, "id", None) or getattr(user, "user_id", None),
+            email=getattr(user, "email", None),
+            full_name=getattr(user, "full_name", None),
+            role=getattr(user, "role", None),
+            is_admin=getattr(user, "is_admin", False),
+            is_active=getattr(user, "is_active", True),
+            power_bi_enabled=bool(config.get("power_bi_enabled")),
+            power_bi_workspace_id=str(config.get("power_bi_workspace_id") or "").strip() or None,
+            power_bi_dataset_id=str(config.get("power_bi_dataset_id") or "").strip() or None,
+            power_bi_tenant_id=str(config.get("power_bi_tenant_id") or "").strip() or None,
+            power_bi_last_sync=last_sync,
+            power_bi_table_names=[
+                str(item).strip()
+                for item in (config.get("power_bi_table_names") or [])
+                if str(item).strip()
+            ],
+            power_bi_workspace_name=str(config.get("power_bi_workspace_name") or "").strip() or None,
+            power_bi_dataset_name=str(config.get("power_bi_dataset_name") or "").strip() or None,
+        )
+
+    def clear_user_powerbi_config(self, user: Any) -> None:
+        path = self._config_path(user)
+        if path.exists():
+            path.unlink()
+
+    def update_runtime_user_last_sync(self, user: Any) -> str:
+        self._config_dir.mkdir(parents=True, exist_ok=True)
+        path = self._config_path(user)
+        payload = self._load_user_config(user)
+        now = datetime.utcnow().isoformat()
+        if payload:
+            payload["power_bi_last_sync"] = now
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return now
+
+    def update_user_powerbi_table_names(self, user: Any, table_names: List[str]) -> List[str]:
+        self._config_dir.mkdir(parents=True, exist_ok=True)
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for item in table_names:
+            value = str(item or "").strip()
+            if not value:
+                continue
+            lowered = value.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            normalized.append(value)
+
+        payload = self._load_user_config(user)
+        payload["power_bi_table_names"] = normalized
+        path = self._config_path(user)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return normalized
     
     # =========================================================================
     # Authentication & Token Management
@@ -41,7 +127,7 @@ class PowerBIService:
     
     def get_access_token(
         self,
-        user: UserDB,
+        user: Any,
         tenant_id: Optional[str] = None,
         client_id: Optional[str] = None,
         client_secret: Optional[str] = None
@@ -182,7 +268,10 @@ class PowerBIService:
 
         headers = self._get_headers(token)
         url = f"{self.base_url}/groups/{workspace_id}/datasets/{dataset_id}/executeQueries"
-        payload = {"queries": [{"query": dax_query}], "serializerSettings": {"includeNulls": True}}
+        payload = {
+            "queries": [{"query": dax_query, "maxRows": 100000}],
+            "serializerSettings": {"includeNulls": True},
+        }
 
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=30)
@@ -196,12 +285,216 @@ class PowerBIService:
             return {"ok": False, "stage": "executeQueries", "status_code": response.status_code, "body": body}
 
         try:
-            return {"ok": True, "stage": "ok", "result": response.json()}
+            data = response.json()
         except Exception:
             body = (response.text or "").strip()
             if len(body) > 2000:
                 body = body[:2000] + "..."
             return {"ok": True, "stage": "ok", "result": body}
+        err_msg = PowerBIService._execute_queries_error_message(data)
+        if err_msg:
+            return {
+                "ok": False,
+                "stage": "executeQueries",
+                "status_code": response.status_code,
+                "body": err_msg,
+                "result": data,
+            }
+        return {"ok": True, "stage": "ok", "result": data}
+
+    def execute_dax_query_verbose(
+        self,
+        user: Any,
+        dax_query: str,
+        dataset_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        dataset = (dataset_id or getattr(user, "power_bi_dataset_id", None) or "").strip()
+        workspace_id = (getattr(user, "power_bi_workspace_id", None) or "").strip()
+        if not workspace_id or not dataset:
+            return {"ok": False, "stage": "config", "error": "Missing user Power BI workspace_id/dataset_id"}
+
+        token = self.get_access_token(user)
+        if not token:
+            return {"ok": False, "stage": "auth", "error": "Failed to obtain access token"}
+
+        headers = self._get_headers(token)
+        url = f"{self.base_url}/groups/{workspace_id}/datasets/{dataset}/executeQueries"
+        payload = {
+            "queries": [{"query": dax_query, "maxRows": 100000}],
+            "serializerSettings": {"includeNulls": True},
+        }
+
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+        except Exception as e:
+            return {"ok": False, "stage": "request", "error": str(e)}
+
+        if response.status_code >= 400:
+            body = (response.text or "").strip()
+            if len(body) > 2000:
+                body = body[:2000] + "..."
+            return {"ok": False, "stage": "executeQueries", "status_code": response.status_code, "body": body}
+
+        try:
+            data = response.json()
+        except Exception:
+            body = (response.text or "").strip()
+            if len(body) > 2000:
+                body = body[:2000] + "..."
+            return {"ok": True, "stage": "ok", "result": body}
+        err_msg = PowerBIService._execute_queries_error_message(data)
+        if err_msg:
+            return {
+                "ok": False,
+                "stage": "executeQueries",
+                "status_code": response.status_code,
+                "body": err_msg,
+                "result": data,
+            }
+        return {"ok": True, "stage": "ok", "result": data}
+
+    def _merge_odata_tables_pages(self, headers: dict, first_data: dict) -> dict:
+        """
+        Power BI REST OData có thể phân trang `value` qua `@odata.nextLink` (GET /datasets/.../tables).
+        """
+        all_values: List[Any] = []
+        chunk = first_data.get("value")
+        if isinstance(chunk, list):
+            all_values.extend(chunk)
+        merged: Dict[str, Any] = {
+            k: v
+            for k, v in first_data.items()
+            if k not in ("value", "@odata.nextLink") and not (isinstance(k, str) and "nextlink" in k.lower())
+        }
+        next_url = first_data.get("@odata.nextLink")
+        if not next_url:
+            for k in first_data:
+                if isinstance(k, str) and "nextlink" in k.lower():
+                    next_url = first_data.get(k)
+                    break
+        pages = 1
+        while isinstance(next_url, str) and next_url.strip() and pages < 100:
+            rsp = requests.get(next_url.strip(), headers=headers, timeout=45)
+            if rsp.status_code >= 400:
+                break
+            try:
+                data = rsp.json()
+            except Exception:
+                break
+            if not isinstance(data, dict):
+                break
+            more = data.get("value")
+            if isinstance(more, list):
+                all_values.extend(more)
+            next_url = data.get("@odata.nextLink")
+            if not next_url:
+                for k in data:
+                    if isinstance(k, str) and "nextlink" in k.lower():
+                        next_url = data.get(k)
+                        break
+            pages += 1
+        merged["value"] = all_values
+        return merged
+
+    @staticmethod
+    def _execute_queries_error_message(data: Any) -> Optional[str]:
+        """
+        executeQueries often returns HTTP 200 with logical failure in results[0].error.
+        """
+        if not isinstance(data, dict):
+            return None
+        results = data.get("results")
+        if not isinstance(results, list) or not results:
+            return None
+        r0 = results[0]
+        if not isinstance(r0, dict):
+            return None
+        err = r0.get("error")
+        if not isinstance(err, dict):
+            return None
+        code = (err.get("code") or "").strip()
+        msg = (err.get("message") or "").strip()
+        parts = [p for p in (code, msg) if p]
+        if parts:
+            return ": ".join(parts)
+        try:
+            return json.dumps(err, ensure_ascii=False)[:1200]
+        except Exception:
+            return str(err)[:1200]
+
+    @staticmethod
+    def _should_try_dax_for_dataset_tables_error(status_code: int, body: str) -> bool:
+        """REST GET .../tables thường lỗi với semantic/import model; thử DAX thay vì chỉ khớp 404 + chuỗi cố định."""
+        if status_code in (401, 403):
+            return False
+        if status_code in (400, 404, 405):
+            return True
+        bl = (body or "").lower()
+        if "not push api" in bl or "not a push" in bl:
+            return True
+        return False
+
+    def _dataset_tables_dax_fallback_user(self, user: Any, dataset_id: str) -> Dict[str, Any]:
+        from app.services.analytics_data_service import _extract_table_names
+
+        attempts: list[Dict[str, Any]] = []
+        queries: list[tuple[str, str]] = [
+            ("EVALUATE INFO.TABLES()", "info.tables"),
+            (
+                'EVALUATE SELECTCOLUMNS(INFO.TABLES(), "TableName", [Name])',
+                "info.tables.selectcolumns",
+            ),
+            (
+                'EVALUATE DISTINCT(SELECTCOLUMNS(INFO.COLUMNS(), "TableName", [Table]))',
+                "info.columns.distinct_tables",
+            ),
+            ("EVALUATE $SYSTEM.TMSCHEMA_TABLES", "dmv.tmschema_tables"),
+        ]
+        for dax_query, stage in queries:
+            info = self.execute_dax_query_verbose(user, dax_query, dataset_id=dataset_id)
+            info["stage"] = stage
+            attempts.append(info)
+            if not info.get("ok"):
+                continue
+            res = info.get("result")
+            if isinstance(res, dict) and _extract_table_names(res):
+                info["attempts"] = attempts
+                return info
+
+        return {"ok": False, "stage": "schema", "error": "Schema discovery failed", "attempts": attempts}
+
+    def _dataset_tables_dax_fallback_global(self, user: Any) -> Dict[str, Any]:
+        from app.services.analytics_data_service import _extract_table_names
+
+        attempts: list[Dict[str, Any]] = []
+        queries: list[tuple[str, str]] = [
+            ("EVALUATE INFO.TABLES()", "info.tables"),
+            (
+                'EVALUATE SELECTCOLUMNS(INFO.TABLES(), "TableName", [Name])',
+                "info.tables.selectcolumns",
+            ),
+            (
+                'EVALUATE DISTINCT(SELECTCOLUMNS(INFO.COLUMNS(), "TableName", [Table]))',
+                "info.columns.distinct_tables",
+            ),
+            ("EVALUATE $SYSTEM.TMSCHEMA_TABLES", "dmv.tmschema_tables"),
+        ]
+        for dax_query, stage in queries:
+            info = self.execute_dax_query_global_verbose(dax_query)
+            info["stage"] = stage
+            attempts.append(info)
+            if not info.get("ok"):
+                continue
+            res = info.get("result")
+            if isinstance(res, dict) and _extract_table_names(res):
+                info["attempts"] = attempts
+                return info
+
+        return {"ok": False, "stage": "schema", "error": "Schema discovery failed", "attempts": attempts}
+
+    def dataset_tables_dax_fallback(self, user: Any, dataset_id: str) -> Dict[str, Any]:
+        """API công khai cho router: thử INFO.TABLES / DMV khi REST không parse được tên bảng."""
+        return self._dataset_tables_dax_fallback_user(user, dataset_id)
 
     def get_dataset_tables_global_verbose(self) -> Dict[str, Any]:
         tenant = (settings.power_bi_tenant_id or os.getenv("POWER_BI_TENANT_ID") or "").strip()
@@ -232,30 +525,26 @@ class PowerBIService:
             body = (response.text or "").strip()
             if len(body) > 2000:
                 body = body[:2000] + "..."
-            # The /tables endpoint only works for Push API datasets. For import/semantic models,
-            # fall back to executeQueries with INFO.TABLES() if available.
-            if response.status_code == 404 and "not Push API dataset" in body:
-                attempts: list[Dict[str, Any]] = []
-
-                info = self.execute_dax_query_global_verbose("EVALUATE INFO.TABLES()")
-                info["stage"] = "info.tables"
-                attempts.append(info)
-                if info.get("ok"):
-                    return info
-
-                # Some dataset types don't support INFO.*; try DMV-style access (may or may not be enabled).
-                dmv = self.execute_dax_query_global_verbose("EVALUATE $SYSTEM.TMSCHEMA_TABLES")
-                dmv["stage"] = "dmv.tmschema_tables"
-                attempts.append(dmv)
-                if dmv.get("ok"):
-                    dmv["attempts"] = attempts
-                    return dmv
-
-                return {"ok": False, "stage": "schema", "error": "Schema discovery failed", "attempts": attempts}
+            if self._should_try_dax_for_dataset_tables_error(response.status_code, body):
+                return self._dataset_tables_dax_fallback_global(user)
             return {"ok": False, "stage": "tables", "status_code": response.status_code, "body": body}
 
         try:
-            return {"ok": True, "stage": "ok", "result": response.json()}
+            first_data = response.json()
+            result: Any = first_data
+            if isinstance(first_data, dict):
+                nl = first_data.get("@odata.nextLink")
+                if not nl:
+                    for k in first_data:
+                        if isinstance(k, str) and "nextlink" in k.lower():
+                            nl = first_data.get(k)
+                            break
+                if isinstance(nl, str) and nl.strip():
+                    result = self._merge_odata_tables_pages(headers, first_data)
+            val = result.get("value") if isinstance(result, dict) else None
+            if isinstance(val, list) and len(val) > 0:
+                return {"ok": True, "stage": "ok", "result": result}
+            return self._dataset_tables_dax_fallback_global(user)
         except Exception:
             return {"ok": True, "stage": "ok", "result": (response.text or "")[:2000]}
 
@@ -327,6 +616,109 @@ class PowerBIService:
         except Exception:
             return {"ok": True, "stage": "ok", "result": (response.text or "")[:2000]}
 
+    def get_dataset_tables_verbose(self, user: Any) -> Dict[str, Any]:
+        workspace_id = (getattr(user, "power_bi_workspace_id", None) or "").strip()
+        dataset_id = (getattr(user, "power_bi_dataset_id", None) or "").strip()
+        if not workspace_id or not dataset_id:
+            return {"ok": False, "stage": "config", "error": "Missing user Power BI workspace_id/dataset_id"}
+
+        token = self.get_access_token(user)
+        if not token:
+            return {"ok": False, "stage": "auth", "error": "Failed to obtain access token"}
+
+        headers = self._get_headers(token)
+        url = f"{self.base_url}/groups/{workspace_id}/datasets/{dataset_id}/tables"
+        try:
+            response = requests.get(url, headers=headers, timeout=20)
+        except Exception as e:
+            return {"ok": False, "stage": "request", "error": str(e)}
+
+        if response.status_code >= 400:
+            body = (response.text or "").strip()
+            if len(body) > 2000:
+                body = body[:2000] + "..."
+            if self._should_try_dax_for_dataset_tables_error(response.status_code, body):
+                return self._dataset_tables_dax_fallback_user(user, dataset_id)
+            return {"ok": False, "stage": "tables", "status_code": response.status_code, "body": body}
+
+        try:
+            first_data = response.json()
+            result: Any = first_data
+            if isinstance(first_data, dict):
+                nl = first_data.get("@odata.nextLink")
+                if not nl:
+                    for k in first_data:
+                        if isinstance(k, str) and "nextlink" in k.lower():
+                            nl = first_data.get(k)
+                            break
+                if isinstance(nl, str) and nl.strip():
+                    result = self._merge_odata_tables_pages(headers, first_data)
+            val = result.get("value") if isinstance(result, dict) else None
+            if isinstance(val, list) and len(val) > 0:
+                return {"ok": True, "stage": "ok", "result": result}
+            return self._dataset_tables_dax_fallback_user(user, dataset_id)
+        except Exception:
+            return {"ok": True, "stage": "ok", "result": (response.text or "")[:2000]}
+
+    def get_table_columns_verbose(self, user: Any, table_name: str) -> Dict[str, Any]:
+        workspace_id = (getattr(user, "power_bi_workspace_id", None) or "").strip()
+        dataset_id = (getattr(user, "power_bi_dataset_id", None) or "").strip()
+        table = (table_name or "").strip()
+        if not table:
+            return {"ok": False, "stage": "input", "error": "table_name is required"}
+        if not workspace_id or not dataset_id:
+            return {"ok": False, "stage": "config", "error": "Missing user Power BI workspace_id/dataset_id"}
+
+        token = self.get_access_token(user)
+        if not token:
+            return {"ok": False, "stage": "auth", "error": "Failed to obtain access token"}
+
+        headers = self._get_headers(token)
+        url = f"{self.base_url}/groups/{workspace_id}/datasets/{dataset_id}/tables/{table}/columns"
+        try:
+            response = requests.get(url, headers=headers, timeout=20)
+        except Exception as e:
+            return {"ok": False, "stage": "request", "error": str(e)}
+
+        if response.status_code >= 400:
+            body = (response.text or "").strip()
+            if len(body) > 2000:
+                body = body[:2000] + "..."
+            if response.status_code == 404 and "not Push API dataset" in body:
+                attempts: list[Dict[str, Any]] = []
+                escaped = table.replace('"', '""')
+                info = self.execute_dax_query_verbose(
+                    user,
+                    f'EVALUATE FILTER(INFO.COLUMNS(), [Table] = "{escaped}")',
+                    dataset_id=dataset_id,
+                )
+                info["stage"] = "info.columns"
+                info["table"] = table
+                attempts.append(info)
+                if info.get("ok"):
+                    info["attempts"] = attempts
+                    return info
+
+                dmv = self.execute_dax_query_verbose(
+                    user,
+                    f'EVALUATE FILTER($SYSTEM.TMSCHEMA_COLUMNS, [TableName] = "{escaped}")',
+                    dataset_id=dataset_id,
+                )
+                dmv["stage"] = "dmv.tmschema_columns"
+                dmv["table"] = table
+                attempts.append(dmv)
+                if dmv.get("ok"):
+                    dmv["attempts"] = attempts
+                    return dmv
+
+                return {"ok": False, "stage": "schema", "error": "Schema discovery failed", "table": table, "attempts": attempts}
+            return {"ok": False, "stage": "columns", "status_code": response.status_code, "body": body}
+
+        try:
+            return {"ok": True, "stage": "ok", "result": response.json()}
+        except Exception:
+            return {"ok": True, "stage": "ok", "result": (response.text or "")[:2000]}
+
     def get_portfolio_metrics_global(self) -> Optional[Dict[str, Any]]:
         """Backend-level wrapper around `get_portfolio_metrics` using global workspace/dataset."""
         dax_query = """
@@ -363,7 +755,7 @@ class PowerBIService:
     # Workspace & Dataset Operations
     # =========================================================================
     
-    def get_workspaces(self, user: UserDB) -> Optional[List[Dict[str, Any]]]:
+    def get_workspaces(self, user: Any) -> Optional[List[Dict[str, Any]]]:
         """
         Get all Power BI workspaces accessible to the user
         
@@ -395,7 +787,7 @@ class PowerBIService:
             logger.error(f"❌ Error fetching workspaces: {str(e)}")
             return None
     
-    def get_workspace_details(self, user: UserDB) -> Optional[Dict[str, Any]]:
+    def get_workspace_details(self, user: Any) -> Optional[Dict[str, Any]]:
         """
         Get details of user's primary workspace
         
@@ -428,7 +820,7 @@ class PowerBIService:
             logger.error(f"❌ Error fetching workspace details: {str(e)}")
             return None
     
-    def get_datasets(self, user: UserDB) -> Optional[List[Dict[str, Any]]]:
+    def get_datasets(self, user: Any) -> Optional[List[Dict[str, Any]]]:
         """
         Get all datasets in user's workspace
         
@@ -463,7 +855,7 @@ class PowerBIService:
             logger.error(f"❌ Error fetching datasets: {str(e)}")
             return None
     
-    def get_dataset_details(self, user: UserDB, dataset_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_dataset_details(self, user: Any, dataset_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Get details of a specific dataset
         
@@ -508,7 +900,7 @@ class PowerBIService:
     
     def execute_dax_query(
         self,
-        user: UserDB,
+        user: Any,
         dax_query: str,
         dataset_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
@@ -571,7 +963,7 @@ class PowerBIService:
             logger.error(f"❌ Error executing DAX query: {str(e)}")
             return None
     
-    def get_risk_data(self, user: UserDB) -> Optional[Dict[str, Any]]:
+    def get_risk_data(self, user: Any) -> Optional[Dict[str, Any]]:
         """
         Get risk analysis data from Power BI
         Common query: High-risk customers, portfolio risk metrics
@@ -597,7 +989,7 @@ class PowerBIService:
         """
         return self.execute_dax_query(user, dax_query)
     
-    def get_portfolio_metrics(self, user: UserDB) -> Optional[Dict[str, Any]]:
+    def get_portfolio_metrics(self, user: Any) -> Optional[Dict[str, Any]]:
         """
         Get portfolio metrics from Power BI
         
@@ -621,7 +1013,7 @@ class PowerBIService:
     
     def get_customer_risk_profile(
         self,
-        user: UserDB,
+        user: Any,
         customer_id: int
     ) -> Optional[Dict[str, Any]]:
         """
@@ -663,7 +1055,7 @@ class PowerBIService:
             "Content-Type": "application/json"
         }
     
-    def refresh_dataset(self, user: UserDB, dataset_id: Optional[str] = None) -> bool:
+    def refresh_dataset(self, user: Any, dataset_id: Optional[str] = None) -> bool:
         """
         Trigger dataset refresh in Power BI
         
@@ -697,45 +1089,7 @@ class PowerBIService:
             logger.error(f"❌ Error triggering dataset refresh: {str(e)}")
             return False
     
-    def update_user_powerbi_config(
-        self,
-        db: Session,
-        user: UserDB,
-        workspace_id: str,
-        dataset_id: str,
-        tenant_id: Optional[str] = None
-    ) -> bool:
-        """
-        Update user's Power BI configuration
-        
-        Args:
-            db: Database session
-            user: User database object
-            workspace_id: Power BI Workspace ID
-            dataset_id: Power BI Dataset ID
-            tenant_id: Optional Azure Tenant ID
-        
-        Returns:
-            True if update successful
-        """
-        try:
-            user.power_bi_enabled = True
-            user.power_bi_workspace_id = workspace_id
-            user.power_bi_dataset_id = dataset_id
-            if tenant_id:
-                user.power_bi_tenant_id = tenant_id
-            user.updated_at = datetime.utcnow()
-            
-            db.commit()
-            logger.info(f"✅ Updated Power BI config for user {user.user_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Error updating Power BI config: {str(e)}")
-            db.rollback()
-            return False
-    
-    def test_connection(self, user: UserDB) -> bool:
+    def test_connection(self, user: Any) -> bool:
         """
         Test Power BI connection for a user
         
@@ -756,6 +1110,47 @@ class PowerBIService:
             
         except Exception as e:
             logger.error(f"❌ Power BI connection test failed: {str(e)}")
+            return False
+
+    def update_user_powerbi_config(
+        self,
+        db: Session,
+        user: Any,
+        workspace_id: str,
+        dataset_id: str,
+        tenant_id: Optional[str] = None,
+        workspace_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+    ) -> bool:
+        """Persist Power BI config outside the database."""
+        try:
+            del db
+            self._config_dir.mkdir(parents=True, exist_ok=True)
+            existing = self._load_user_config(user)
+            wn = str(workspace_name or "").strip() or str(existing.get("power_bi_workspace_name") or "").strip()
+            dn = str(dataset_name or "").strip() or str(existing.get("power_bi_dataset_name") or "").strip()
+            payload = {
+                "power_bi_enabled": True,
+                "power_bi_workspace_id": str(workspace_id).strip(),
+                "power_bi_dataset_id": str(dataset_id).strip(),
+                "power_bi_tenant_id": str(tenant_id or "").strip(),
+                "power_bi_workspace_name": wn,
+                "power_bi_dataset_name": dn,
+                "power_bi_last_sync": datetime.utcnow().isoformat(),
+                "power_bi_table_names": [
+                    str(item).strip()
+                    for item in (existing.get("power_bi_table_names") or [])
+                    if str(item).strip()
+                ],
+            }
+            self._config_path(user).write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            logger.info("Updated Power BI config for user %s", self._get_user_id(user))
+            return True
+        except Exception as e:
+            logger.error("Error updating Power BI config: %s", str(e))
             return False
 
 

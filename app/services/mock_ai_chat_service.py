@@ -13,7 +13,17 @@ from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from app.db.models import ChatHistoryDB, ChatSessionDB, ChatSessionPinDB
+from app.db.models import ChatHistoryDB, ChatSessionDB
+from app.services.chat_session_metadata import (
+    build_message_with_attachments,
+    build_session_metadata,
+    extract_message_attachments,
+    fetch_chat_session_names,
+    fetch_pinned_session_ids,
+    strip_session_metadata,
+    summary_title_from_message,
+    update_chat_session_name,
+)
 
 
 @dataclass
@@ -50,9 +60,7 @@ class MockAIChatService:
                 "Bạn có thể test UI/endpoint và DB session/history bình thường."
             )
 
-            meta = f"[SESSION_NAME]{session_name}[/SESSION_NAME]"
-            if initial_context:
-                meta += f"\n[INITIAL_CONTEXT]{initial_context}[/INITIAL_CONTEXT]"
+            meta = build_session_metadata(session_name=session_name, initial_context=initial_context)
 
             session.add(
                 ChatHistoryDB(
@@ -63,6 +71,8 @@ class MockAIChatService:
                     created_at=now,
                 )
             )
+            session.flush()
+            update_chat_session_name(session, session_id, session_name)
             session.commit()
             return session_id, greeting
         except Exception as e:
@@ -93,17 +103,33 @@ class MockAIChatService:
                 "- Mục tiêu vay và kỳ hạn\n"
             )
 
+            prior_rows = (
+                session.query(ChatHistoryDB)
+                .filter(ChatHistoryDB.session_id == sid)
+                .order_by(ChatHistoryDB.created_at.asc())
+                .all()
+            )
+            prior_user_messages = sum(1 for row in prior_rows if strip_session_metadata(row.message))
+
             now = datetime.utcnow()
+            att = None
+            if isinstance(customer_context, dict):
+                raw_att = customer_context.get("uploaded_files")
+                att = raw_att if isinstance(raw_att, list) else None
             session.add(
                 ChatHistoryDB(
                     session_id=sid,
                     user_id=user_id,
-                    message=message,
+                    message=build_message_with_attachments(message, att),
                     bot_response=reply,
                     created_at=now,
                 )
             )
             chat_session.last_interaction = now
+            if prior_user_messages == 0:
+                auto_title = summary_title_from_message(message)
+                if auto_title:
+                    update_chat_session_name(session, sid, auto_title)
             session.commit()
             return MockChatResponse(
                 session_id=sid,
@@ -130,8 +156,17 @@ class MockAIChatService:
         )
         out: List[Dict] = []
         for m in messages:
-            if m.message:
-                out.append({"role": "user", "content": m.message, "timestamp": m.created_at.isoformat()})
+            clean_message = (strip_session_metadata(m.message) or "").strip()
+            attachments = extract_message_attachments(m.message)
+            if clean_message or attachments:
+                out.append(
+                    {
+                        "role": "user",
+                        "content": clean_message,
+                        "timestamp": m.created_at.isoformat(),
+                        "attachments": attachments,
+                    }
+                )
             if m.bot_response:
                 out.append({"role": "assistant", "content": m.bot_response, "timestamp": m.created_at.isoformat()})
         return out
@@ -146,9 +181,10 @@ class MockAIChatService:
         assistant_messages = len([m for m in messages if m.bot_response])
         chat_session.last_interaction = datetime.utcnow()
         session.commit()
+        session_name = fetch_chat_session_names(session, [sid]).get(sid)
         return {
             "session_id": sid,
-            "session_name": f"Session {sid[:8]}",
+            "session_name": session_name or f"Session {sid[:8]}",
             "duration": None,
             "user_messages": user_messages,
             "assistant_messages": assistant_messages,
@@ -163,18 +199,14 @@ class MockAIChatService:
             .order_by(ChatSessionDB.created_at.desc())
             .all()
         )
-        pinned_ids = set()
-        try:
-            pinned_rows = session.query(ChatSessionPinDB.session_id).filter(ChatSessionPinDB.user_id == user_id).all()
-            pinned_ids = {str(r[0]) for r in pinned_rows}
-        except Exception:
-            pinned_ids = set()
+        pinned_ids = fetch_pinned_session_ids(session, user_id, [str(s.session_id) for s in sessions])
 
         sessions = sorted(sessions, key=lambda s: (0 if str(s.session_id) in pinned_ids else 1,))
+        session_names = fetch_chat_session_names(session, [str(s.session_id) for s in sessions])
         return [
             {
                 "session_id": str(s.session_id),
-                "session_name": f"Session {str(s.session_id)[:8]}",
+                "session_name": session_names.get(str(s.session_id)) or f"Session {str(s.session_id)[:8]}",
                 "is_active": True,
                 "is_pinned": str(s.session_id) in pinned_ids,
                 "created_at": s.created_at.isoformat(),

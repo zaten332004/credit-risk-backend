@@ -1,42 +1,22 @@
-"""
-Test direct SQL execution
-"""
+"""Dry-run test for executing the MySQL schema file."""
+
 import sys
-sys.path.insert(0, '../')
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import text
+
 from app.db.session import engine
 
-# Read the SQL file
-with open("../docs/INSERT_SAMPLE_USERS_PER_ROLE.sql", 'r', encoding='utf-8') as f:
-    content = f.read()
+schema_path = Path(__file__).resolve().parents[1] / "docs" / "database" / "Database_MySQL_V1.sql"
+content = schema_path.read_text(encoding="utf-8")
 
-print("SQL Content:")
-print("="*80)
-print(content)
-print("="*80)
-
-# Execute each statement
-statements = content.split('GO\n')
+print("Schema preview:")
+print("=" * 80)
+print(content[:2000])
+print("=" * 80)
 
 with engine.connect() as connection:
-    transaction = connection.begin()
-    for i, stmt in enumerate(statements):
-        stmt = stmt.strip()
-        if stmt and not stmt.startswith('--') and not stmt.startswith('PRINT'):
-            print(f"\nStatement {i}:")
-            print(stmt[:100])
-            try:
-                result = connection.execute(text(stmt))
-                print(f"Rows affected: {result.rowcount}")
-            except Exception as e:
-                print(f"Error: {e}")
-    
-    # Verify
-    print("\n\nVerifying inserted data...")
-    verify_query = text("SELECT COUNT(*) as cnt FROM [User] WHERE username LIKE '%_demo'")
-    result = connection.execute(verify_query)
-    count = result.scalar()
+    count = connection.execute(text("SELECT COUNT(*) FROM `User` WHERE username LIKE '%_demo'")).scalar()
     print(f"Users with '_demo' in username: {count}")
-    
-    transaction.rollback()  # Rollback to preserve original state for now

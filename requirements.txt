@@ -22,9 +22,9 @@ google-generativeai>=0.6.0
 google-genai
 openai>=1.0.0
 
-# Database (SQL Server via SQLAlchemy + pyodbc)
+# Database (MySQL via SQLAlchemy + PyMySQL)
 sqlalchemy==2.0.35
-pyodbc==5.2.0
+PyMySQL==1.1.1
 
 # Testing
 pytest==8.4.2

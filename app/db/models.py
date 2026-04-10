@@ -30,9 +30,10 @@ class UserDB(Base):
     role_id = Column(Integer, ForeignKey("Role.role_id"), nullable=True)  # nullable for pending registrations
     username = Column(String(50), nullable=False, unique=True)
     email = Column(String(100), nullable=False, unique=True)
-    password = Column(String(255), nullable=False)
+    password_hash = Column(String(255), nullable=False)
     full_name = Column(String(100), nullable=True)
     phone = Column(String(20), nullable=True)
+    avatar_path = Column(String(255), nullable=True)
     
     # Registration workflow fields
     status = Column(String(20), nullable=False, default="pending")  # pending, approved, rejected, verified
@@ -118,7 +119,20 @@ class CustomerDB(Base):
 
     customer_id = Column(BigInteger, primary_key=True)
     user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=True)
+    external_customer_ref = Column(String(50), nullable=True)
     full_name = Column(String(150), nullable=False)
+    date_of_birth = Column(Date, nullable=True)
+    gender = Column(String(20), nullable=True)
+    national_id = Column(String(20), nullable=True)
+    id_issue_date = Column(Date, nullable=True)
+    id_issue_place = Column(String(255), nullable=True)
+    nationality = Column(String(100), nullable=True)
+    marital_status = Column(String(50), nullable=True)
+    phone_number = Column(String(20), nullable=True)
+    email = Column(String(255), nullable=True)
+    permanent_address = Column(String(500), nullable=True)
+    current_address = Column(String(500), nullable=True)
+    occupation = Column(String(100), nullable=True)
     age = Column(Integer, nullable=True)
     monthly_income = Column(Numeric(18, 2), nullable=True)
     credit_score = Column(Integer, nullable=True)
@@ -158,12 +172,21 @@ class LoanApplicationDB(Base):
     __tablename__ = "Loan_Application"
 
     application_id = Column(BigInteger, primary_key=True)
+    application_ref_no = Column(String(50), nullable=True)
     customer_id = Column(BigInteger, ForeignKey("Customer.customer_id"), nullable=False)
+    source_department_code = Column(String(30), nullable=True)
+    source_branch_code = Column(String(30), nullable=True)
+    application_date = Column(Date, nullable=True)
     loan_amount = Column(Numeric(18, 2), nullable=False)
     loan_term = Column(Integer, nullable=False)  # months
     interest_rate = Column(Numeric(10, 4), nullable=True)
     loan_status = Column(String(50), nullable=False)  # pending, approved, rejected, disbursed
     loan_purpose = Column(String(200), nullable=True)
+    loan_type = Column(String(50), nullable=True)
+    collateral_id = Column(String(50), nullable=True)
+    collateral_value = Column(Numeric(18, 2), nullable=True)
+    template_version = Column(String(20), nullable=True)
+    upload_batch_id = Column(String(64), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     customer = relationship("CustomerDB", back_populates="loan_applications")
@@ -384,6 +407,8 @@ class ChatSessionDB(Base):
     user_id = Column(BigInteger, ForeignKey("User.user_id"), nullable=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     last_interaction = Column(DateTime, nullable=True)
+    data_context_cached = Column(UnicodeText, nullable=True)  # Cache dữ liệu analytics để tránh load lại mỗi message
+    data_context_cached_at = Column(DateTime, nullable=True)  # Thời điểm cache, TTL=1 giờ
     user = relationship("UserDB", back_populates="chat_sessions")
     messages = relationship("ChatHistoryDB", back_populates="session", cascade="all, delete-orphan")
 
