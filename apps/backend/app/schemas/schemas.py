@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -22,7 +22,7 @@ class Token(BaseModel):
     user_id: int
     email: str
     full_name: str | None = None
-    role: str  # admin, manager, analyst, viewer
+    role: str  # admin, manager, risk analyst, viewer
 
 
 class TokenData(BaseModel):
@@ -33,6 +33,20 @@ class TokenData(BaseModel):
 class LoginRequest(BaseModel):
     username_or_email: str = Field(..., description="Username or email")
     password: str = Field(..., description="Password")
+
+
+class PasswordResetRequestBody(BaseModel):
+    email: str = Field(..., description="Email address")
+
+
+class PasswordResetConfirmBody(BaseModel):
+    email: str = Field(..., description="Email address")
+    code: str = Field(..., min_length=4, max_length=10, description="Verification code")
+    new_password: str = Field(..., min_length=6, description="New password")
+
+
+class MessageResponse(BaseModel):
+    message: str
 
 
 class OAuthLoginRequest(BaseModel):
@@ -63,7 +77,7 @@ class User(BaseModel):
     email: str
     full_name: str | None = None
     is_active: bool = True
-    role: str = "viewer"  # admin, manager, analyst, viewer
+    role: str = "viewer"  # admin, manager, risk analyst, viewer
     is_admin: bool = False
 
 
@@ -78,11 +92,63 @@ class UserRead(BaseModel):
     user_id: int
     username: str
     email: str
-    role_id: int
+    role_id: int | None = None
+    full_name: str | None = None
+    role: str = "viewer"
+    status: str | None = None
+    is_active: bool = True
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class UserRoleUpdateBody(BaseModel):
+    role: str = Field(..., description="admin|manager|analyst|viewer")
+
+
+class ProfileRead(BaseModel):
+    user_id: int
+    username: str
+    email: str
+    full_name: str | None = None
+    phone: str | None = None
+    avatar_url: str | None = None
+    role: str = "viewer"
+    status: str | None = None
+    is_email_verified: bool = False
+    created_at: datetime
+
+
+class ProfileUpdateBody(BaseModel):
+    full_name: str | None = Field(None, max_length=100)
+    phone: str | None = Field(None, max_length=20)
+
+
+class PasswordChangeBody(BaseModel):
+    current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=6)
+
+
+class EmailChangeRequestBody(BaseModel):
+    new_email: str = Field(..., description="New email address")
+
+
+class EmailChangeRequestResponse(BaseModel):
+    message: str
+    pending_email: str
+    expires_in_seconds: int
+
+
+class EmailChangeConfirmBody(BaseModel):
+    code: str = Field(..., min_length=4, max_length=10)
+
+
+class EmailChangeConfirmResponse(BaseModel):
+    message: str
+    email: str
+    access_token: str
+    role: str
 
 
 # ============================================================================
@@ -119,6 +185,10 @@ class UserRegistrationApprovalRequest(BaseModel):
     rejection_reason: str | None = Field(None, description="Required if action is 'reject'")
 
 
+class UserRegistrationResendRequest(BaseModel):
+    email: str = Field(..., description="Registered email address")
+
+
 class UserRegistrationRead(BaseModel):
     user_id: int
     username: str
@@ -130,6 +200,7 @@ class UserRegistrationRead(BaseModel):
     is_email_verified: bool
     created_at: datetime
     approved_by: int | None = None
+    approved_by_name: str | None = None
     approved_at: datetime | None = None
     rejection_reason: str | None = None
 
@@ -191,13 +262,46 @@ class CustomerEmploymentRead(BaseModel):
 
 class CustomerCreate(BaseModel):
     full_name: str
-    age: int
+    age: Optional[int] = None
     monthly_income: float
+    external_customer_ref: Optional[str] = None
+    date_of_birth: Optional[date] = None
+    gender: Optional[str] = None
+    national_id: Optional[str] = None
+    id_issue_date: Optional[date] = None
+    id_issue_place: Optional[str] = None
+    nationality: Optional[str] = None
+    marital_status: Optional[str] = None
+    phone_number: Optional[str] = None
+    email: Optional[str] = None
+    permanent_address: Optional[str] = None
+    current_address: Optional[str] = None
+    occupation: Optional[str] = None
+    phone: Optional[str] = None
+    company: Optional[str] = None
     credit_score: Optional[int] = None
     employment_status: Optional[str] = None
+    loan_type: Optional[str] = None
+    requested_loan_amount: Optional[float] = None
+    requested_term_months: Optional[int] = None
+    annual_interest_rate: Optional[float] = None
+    risk_level: Optional[str] = None
+    application_status: Optional[str] = None
+    application_ref_no: Optional[str] = None
+    source_department_code: Optional[str] = None
+    source_branch_code: Optional[str] = None
+    application_date: Optional[date] = None
+    loan_purpose: Optional[str] = None
+    collateral_id: Optional[str] = None
+    collateral_value: Optional[float] = None
+    template_version: Optional[str] = None
+    upload_batch_id: Optional[str] = None
+    notes: Optional[str] = None
 
     @validator('age')
     def age_valid(cls, v):
+        if v is None:
+            return v
         if v < 18 or v > 150:
             raise ValueError('Age must be between 18 and 150')
         return v
@@ -208,13 +312,62 @@ class CustomerCreate(BaseModel):
             raise ValueError('Monthly income must be positive')
         return v
 
+    @validator('requested_loan_amount')
+    def requested_loan_amount_valid(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError('Requested loan amount must be positive')
+        return v
+
+    @validator('requested_term_months')
+    def requested_term_valid(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError('Requested term must be positive')
+        return v
+
+    @validator('annual_interest_rate')
+    def annual_interest_rate_valid(cls, v):
+        if v is not None and (v < 0 or v > 100):
+            raise ValueError('Annual interest rate must be between 0 and 100')
+        return v
+
 
 class CustomerUpdate(BaseModel):
     full_name: Optional[str] = None
     age: Optional[int] = None
     monthly_income: Optional[float] = None
+    external_customer_ref: Optional[str] = None
+    date_of_birth: Optional[date] = None
+    gender: Optional[str] = None
+    national_id: Optional[str] = None
+    id_issue_date: Optional[date] = None
+    id_issue_place: Optional[str] = None
+    nationality: Optional[str] = None
+    marital_status: Optional[str] = None
+    phone_number: Optional[str] = None
+    email: Optional[str] = None
+    permanent_address: Optional[str] = None
+    current_address: Optional[str] = None
+    occupation: Optional[str] = None
+    phone: Optional[str] = None
+    company: Optional[str] = None
     credit_score: Optional[int] = None
     employment_status: Optional[str] = None
+    loan_type: Optional[str] = None
+    requested_loan_amount: Optional[float] = None
+    requested_term_months: Optional[int] = None
+    annual_interest_rate: Optional[float] = None
+    risk_level: Optional[str] = None
+    application_status: Optional[str] = None
+    application_ref_no: Optional[str] = None
+    source_department_code: Optional[str] = None
+    source_branch_code: Optional[str] = None
+    application_date: Optional[date] = None
+    loan_purpose: Optional[str] = None
+    collateral_id: Optional[str] = None
+    collateral_value: Optional[float] = None
+    template_version: Optional[str] = None
+    upload_batch_id: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class CustomerRead(BaseModel):
@@ -222,8 +375,42 @@ class CustomerRead(BaseModel):
     full_name: str
     age: Optional[int] = None
     monthly_income: Optional[float] = None
+    external_customer_ref: Optional[str] = None
+    date_of_birth: Optional[date] = None
+    gender: Optional[str] = None
+    national_id: Optional[str] = None
+    id_issue_date: Optional[date] = None
+    id_issue_place: Optional[str] = None
+    nationality: Optional[str] = None
+    marital_status: Optional[str] = None
+    phone_number: Optional[str] = None
+    email: Optional[str] = None
+    permanent_address: Optional[str] = None
+    current_address: Optional[str] = None
+    occupation: Optional[str] = None
+    phone: Optional[str] = None
+    company: Optional[str] = None
     credit_score: Optional[int] = None
     employment_status: Optional[str] = None
+    loan_type: Optional[str] = None
+    requested_loan_amount: Optional[float] = None
+    requested_term_months: Optional[int] = None
+    annual_interest_rate: Optional[float] = None
+    risk_level: Optional[str] = None
+    application_status: Optional[str] = None
+    application_ref_no: Optional[str] = None
+    source_department_code: Optional[str] = None
+    source_branch_code: Optional[str] = None
+    application_date: Optional[date] = None
+    loan_purpose: Optional[str] = None
+    collateral_id: Optional[str] = None
+    collateral_value: Optional[float] = None
+    template_version: Optional[str] = None
+    upload_batch_id: Optional[str] = None
+    notes: Optional[str] = None
+    created_by: Optional[str] = None
+    approved_by: Optional[str] = None
+    approved_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
     employments: List[CustomerEmploymentRead] = []
@@ -261,10 +448,19 @@ class CustomerHistoryItem(BaseModel):
 
 class LoanApplicationCreate(BaseModel):
     customer_id: int
+    application_ref_no: Optional[str] = None
+    source_department_code: Optional[str] = None
+    source_branch_code: Optional[str] = None
+    application_date: Optional[date] = None
     loan_amount: float
     loan_term: int  # months
     interest_rate: Optional[float] = None
     loan_purpose: Optional[str] = None
+    loan_type: Optional[str] = None
+    collateral_id: Optional[str] = None
+    collateral_value: Optional[float] = None
+    template_version: Optional[str] = None
+    upload_batch_id: Optional[str] = None
 
     @validator('loan_amount')
     def loan_amount_valid(cls, v):
@@ -282,11 +478,20 @@ class LoanApplicationCreate(BaseModel):
 class LoanApplicationRead(BaseModel):
     application_id: int
     customer_id: int
+    application_ref_no: Optional[str] = None
+    source_department_code: Optional[str] = None
+    source_branch_code: Optional[str] = None
+    application_date: Optional[date] = None
     loan_amount: float
     loan_term: int
     interest_rate: Optional[float] = None
     loan_status: str
     loan_purpose: Optional[str] = None
+    loan_type: Optional[str] = None
+    collateral_id: Optional[str] = None
+    collateral_value: Optional[float] = None
+    template_version: Optional[str] = None
+    upload_batch_id: Optional[str] = None
     created_at: datetime
 
     class Config:
@@ -396,12 +601,29 @@ class RiskRequest(BaseModel):
     debt: float = Field(..., ge=0, description="Total monthly debt payments")
     age: int = Field(..., ge=18, le=120)
     credit_history_months: int = Field(..., ge=0)
+    credit_score: Optional[int] = Field(None, ge=0, le=1000)
+    loan_type: Optional[str] = None
+    interest_rate: Optional[float] = Field(None, ge=0, le=100)
+    loan_term_months: Optional[int] = Field(None, ge=0)
+    collateral_value: Optional[float] = Field(None, ge=0)
+    employment_status: Optional[str] = None
 
 
 class RiskResponse(BaseModel):
     risk_score: float = Field(..., ge=0, le=1, description="0 (low risk) .. 1 (high risk)")
     risk_label: str = Field(..., description="low|medium|high")
+    cic_score: int = Field(..., ge=150, le=850, description="CIC-like score scale for Vietnam market")
+    cic_group: str = Field(..., description="very_good|good|average|high_risk")
+    cic_rating: str = Field(..., description="excellent|good|watchlist|substandard|loss")
     explanation: str
+    explanation_en: Optional[str] = Field(
+        default=None,
+        description="Detailed model walkthrough in English (optional, for bilingual clients)",
+    )
+    explanation_detail: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Structured breakdown for rich UI (factors, weights, money amounts)",
+    )
 
 
 class RiskScoreDetail(BaseModel):
@@ -436,8 +658,15 @@ class RiskBatchBody(BaseModel):
 
 
 class RiskBatchResult(BaseModel):
-    results: List[RiskScoreDetail]
-    summary: Dict[str, Any]
+    results: List[RiskScoreDetail] = Field(default_factory=list)
+    summary: Dict[str, Any] = Field(default_factory=dict)
+    processed_count: int = 0
+    success_count: int = 0
+    error_count: int = 0
+    average_score: Optional[float] = None
+    max_score: Optional[float] = None
+    min_score: Optional[float] = None
+    errors: Optional[List[Dict[str, Any]]] = None
 
 
 class RiskSimulationBody(BaseModel):
@@ -475,6 +704,23 @@ class PortfolioKPIResponse(BaseModel):
 class RiskDistributionResponse(BaseModel):
     buckets: Dict[str, float]
     chart_data: List[Dict[str, Any]]
+    # Histogram on a unified 0–100 "display score" scale (see risk_distribution service).
+    score_buckets: List[Dict[str, Any]] = Field(default_factory=list)
+    score_stats: Dict[str, float] = Field(
+        default_factory=lambda: {"mean": 0.0, "median": 0.0, "std_dev": 0.0}
+    )
+
+
+class PortfolioRiskFactorItem(BaseModel):
+    """One bar on the risk factor chart: impact is share of mean weighted contributions (0–100)."""
+
+    factor_key: str
+    impact: float
+
+
+class PortfolioRiskFactorsResponse(BaseModel):
+    items: List[PortfolioRiskFactorItem]
+    sample_size: int
 
 
 class ConcentrationItem(BaseModel):
@@ -575,6 +821,7 @@ class AlertRead(BaseModel):
     alert_id: int
     facility_id: Optional[int] = None
     customer_id: Optional[int] = None
+    customer_name: Optional[str] = None
     alert_type: str
     severity: str
     message: Optional[str] = None
@@ -616,6 +863,7 @@ class AlertResolveBody(BaseModel):
 class AuditLogRead(BaseModel):
     audit_id: int
     user_id: Optional[int] = None
+    actor_name: Optional[str] = None
     action: str
     entity_type: str
     entity_id: Optional[int] = None
@@ -644,9 +892,57 @@ class ExportResponse(BaseModel):
 class UploadJobResponse(BaseModel):
     job_id: str
     status: str
+    file_name: Optional[str] = None
+    row_count: Optional[int] = None
+    column_count: Optional[int] = None
+    columns: Optional[List[str]] = None
+    preview_rows: Optional[List[Dict[str, Any]]] = None
+    context_text: Optional[str] = None
+    processed_count: Optional[int] = None
+    success_count: Optional[int] = None
+    error_count: Optional[int] = None
+    imported_customers: Optional[int] = None
+    imported_applications: Optional[int] = None
+    import_errors: Optional[List[Dict[str, Any]]] = None
+    error: Optional[str] = None
+
+
+class UploadJobContentResponse(BaseModel):
+    job_id: str
+    file_name: Optional[str] = None
+    row_count: Optional[int] = None
+    column_count: Optional[int] = None
+    columns: Optional[List[str]] = None
+    rows: Optional[List[Dict[str, Any]]] = None
+    context_text: Optional[str] = None
+    total_rows: Optional[int] = None
+    offset: int = 0
+    limit: int = 0
+    has_more: bool = False
+
+
+class UploadJobErrorsResponse(BaseModel):
+    job_id: str
+    errors: List[Dict[str, Any]]
+    total_errors: int
+    offset: int = 0
+    limit: int = 0
+    has_more: bool = False
 
 
 class JobStatusResponse(BaseModel):
     job_id: str
     progress: float
+    status: Optional[str] = None
     result_url: Optional[str] = None
+
+
+class UploadHistoryItemRead(BaseModel):
+    audit_id: int
+    job_id: Optional[str] = None
+    file_name: Optional[str] = None
+    status: str
+    processed_count: Optional[int] = None
+    success_count: Optional[int] = None
+    error_count: Optional[int] = None
+    created_at: datetime

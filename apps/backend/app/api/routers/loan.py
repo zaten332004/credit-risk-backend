@@ -4,7 +4,7 @@ Loan Approval Router - API endpoints for loan application and approval
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_active_user
+from app.core.security import get_current_active_user, get_current_analyst_user, get_current_manager_user
 from app.db.session import get_db
 from app.schemas.schemas import (
     LoanApplicationCreate,
@@ -24,7 +24,7 @@ async def apply_for_loan(
     loan_amount: float,
     loan_term: int,
     loan_purpose: str = "",
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_analyst_user),  # Analyst+ có thể tạo hồ sơ vay
     db: Session = Depends(get_db),
 ) -> LoanApplicationRead:
     """
@@ -50,7 +50,7 @@ async def apply_for_loan(
 async def score_loan_application(
     application_id: int,
     risk_data: RiskRequest,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_analyst_user),  # Analyst+ có thể score
     db: Session = Depends(get_db),
 ) -> RiskScoreDetail:
     """
@@ -81,7 +81,7 @@ async def score_loan_application(
 async def approve_loan_application(
     application_id: int,
     approved_amount: float,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_manager_user),  # Chỉ Manager+ có thể duyệt
     db: Session = Depends(get_db),
 ):
     """
@@ -109,7 +109,7 @@ async def approve_loan_application(
 async def reject_loan_application(
     application_id: int,
     reason: str = "",
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_manager_user),  # Chỉ Manager+ có thể từ chối
     db: Session = Depends(get_db),
 ):
     """
@@ -133,7 +133,7 @@ async def reject_loan_application(
 async def get_approval_decision(
     application_id: int,
     risk_threshold: float = 0.66,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_analyst_user),  # Analyst+ có thể xem quyết định
     db: Session = Depends(get_db),
 ):
     """
@@ -156,7 +156,7 @@ async def get_approval_decision(
 @router.get("/{application_id}")
 async def get_application_details(
     application_id: int,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_analyst_user),  # Analyst+ có thể xem chi tiết
     db: Session = Depends(get_db),
 ):
     """

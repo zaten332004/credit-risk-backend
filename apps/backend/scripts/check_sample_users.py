@@ -1,32 +1,31 @@
-#!/usr/bin/env python3
-"""Verify sample users inserted"""
-import pyodbc
+"""Verify sample users inserted into MySQL."""
 
-conn = pyodbc.connect(
-    'Driver={ODBC Driver 18 for SQL Server};'
-    'Server=DESKTOP-7EPLMS3\\SQLEXPRESS;'
-    'Database=CreditRiskDB;'
-    'UID=sa;'
-    'PWD=12345;'
-    'Encrypt=no;'
-)
+import sys
+from pathlib import Path
 
-cursor = conn.cursor()
-cursor.execute("""
-    SELECT user_id, username, email, r.role_name, status 
-    FROM [User] u 
-    LEFT JOIN Role r ON u.role_id = r.role_id 
-    ORDER BY user_id DESC
-""")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-print("\n📊 Sample Users in Database:")
+from sqlalchemy import text
+
+from app.db.session import engine
+
+
+with engine.connect() as connection:
+    rows = connection.execute(
+        text(
+            """
+            SELECT u.user_id, u.username, u.email, r.role_name, u.status
+            FROM `User` u
+            LEFT JOIN `Role` r ON u.role_id = r.role_id
+            ORDER BY u.user_id DESC
+            """
+        )
+    ).fetchall()
+
+print("\nSample Users in Database:")
 print("=" * 80)
-print(f"{'ID':<4} | {'Username':<15} | {'Email':<30} | {'Role':<10} | {'Status':<10}")
+print(f"{'ID':<4} | {'Username':<20} | {'Email':<35} | {'Role':<18} | {'Status':<10}")
 print("-" * 80)
-
-for row in cursor.fetchall():
-    user_id, username, email, role, status = row
-    print(f"{user_id:<4} | {username:<15} | {email:<30} | {role:<10} | {status:<10}")
-
+for row in rows:
+    print(f"{row[0]:<4} | {row[1]:<20} | {row[2]:<35} | {(row[3] or ''):<18} | {(row[4] or ''):<10}")
 print("=" * 80)
-conn.close()

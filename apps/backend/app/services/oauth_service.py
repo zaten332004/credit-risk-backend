@@ -9,7 +9,7 @@ import requests
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.security import create_access_token, pwd_context
+from app.core.security import create_access_token, normalize_role_name, pwd_context
 from app.db.models import RoleDB, UserDB
 from app.schemas.schemas import Token
 
@@ -56,13 +56,24 @@ class OAuthService:
             params={"id_token": id_token},
             timeout=10,
         )
-        if response.status_code != 200:
-            raise ValueError("Invalid Google token")
-        payload = response.json()
+        if response.status_code == 200:
+            payload = response.json()
+            configured_client_id = settings.google_oauth_client_id.strip()
+            if configured_client_id and payload.get("aud") != configured_client_id:
+                raise ValueError("Google token audience is invalid")
+            return payload
 
-        configured_client_id = settings.google_oauth_client_id.strip()
-        if configured_client_id and payload.get("aud") != configured_client_id:
-            raise ValueError("Google token audience is invalid")
+        userinfo = requests.get(
+            "https://openidconnect.googleapis.com/v1/userinfo",
+            headers={"Authorization": f"Bearer {id_token}"},
+            timeout=10,
+        )
+        if userinfo.status_code != 200:
+            raise ValueError("Invalid Google token")
+
+        payload = userinfo.json()
+        if not payload.get("email"):
+            raise ValueError("Google token missing email")
         return payload
 
     @staticmethod
@@ -89,10 +100,13 @@ class OAuthService:
         if response.status_code != 200:
             return None
 
-        for email_obj in response.json():
+        emails = response.json()
+        if not isinstance(emails, list):
+            return None
+        for email_obj in emails:
             if email_obj.get("verified") and email_obj.get("primary"):
                 return email_obj.get("email")
-        for email_obj in response.json():
+        for email_obj in emails:
             if email_obj.get("verified"):
                 return email_obj.get("email")
         return None
@@ -103,9 +117,9 @@ class OAuthService:
         if user:
             return user
 
-        analyst_role = OAuthService._get_role_by_name(db, "analyst")
+        analyst_role = OAuthService._get_role_by_name(db, "risk analyst") or OAuthService._get_role_by_name(db, "analyst")
         if not analyst_role:
-            raise ValueError("Role 'analyst' is not configured in Role table")
+            raise ValueError("Role 'risk analyst' is not configured in Role table")
 
         username = OAuthService._build_unique_username(db, username_seed)
         temp_password = pwd_context.hash(secrets.token_urlsafe(32))
@@ -113,7 +127,7 @@ class OAuthService:
         user = UserDB(
             username=username,
             email=email,
-            password=temp_password,
+            password_hash=temp_password,
             full_name=full_name,
             user_type="analyst",
             status="approved",
@@ -128,7 +142,7 @@ class OAuthService:
     @staticmethod
     def _build_token(db: Session, user: UserDB) -> Token:
         role = db.query(RoleDB).filter(RoleDB.role_id == user.role_id).first()
-        role_name = role.role_name.lower() if role else "viewer"
+        role_name = normalize_role_name(role.role_name if role else "viewer")
 
         access_token = create_access_token(data={"sub": user.email, "role": role_name})
         return Token(

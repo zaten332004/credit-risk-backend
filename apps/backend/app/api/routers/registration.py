@@ -11,6 +11,7 @@ from app.schemas.schemas import (
     UserRegistrationRequest,
     UserRegistrationResponse,
     UserRegistrationApprovalRequest,
+    UserRegistrationResendRequest,
     UserRegistrationRead,
     User,
 )
@@ -67,17 +68,33 @@ async def verify_email(token: str, db: Session = Depends(get_db)):
     return {"message": message, "status": "verified"}
 
 
-@router.get("/pending", response_model=list[UserRegistrationRead])
-async def get_pending_registrations(
+@router.post("/resend-verification")
+async def resend_verification_email(
+    request: UserRegistrationResendRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Resend verification email for a pending registration
+    """
+    success, message = RegistrationService.resend_verification_email(db, request.email)
+
+    if not success:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
+
+    return {"message": message, "status": "resent"}
+
+
+@router.get("/list", response_model=list[UserRegistrationRead])
+async def list_registrations(
     reg_type: str | None = None,
+    status_filter: str | None = None,
     current_user: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db)
 ):
     """
-    Get all pending registrations (admin only)
-    Can filter by 'analyst' or 'manager'
+    Get registrations for admin review.
     """
-    registrations = RegistrationService.get_pending_registrations(db, reg_type)
+    registrations = RegistrationService.list_registrations(db, reg_type, status_filter)
     return registrations
 
 

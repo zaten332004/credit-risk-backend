@@ -8,15 +8,107 @@ from typing import Optional, Tuple
 
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 
 from app.db.models import UserDB, RoleDB
+from app.core.config import settings
 from app.core.security import pwd_context
 from app.schemas.schemas import UserRegistrationRequest, UserRegistrationResponse
+from app.services.audit_service import log_action
 from app.services.email_service import EmailService
 
 
 class RegistrationService:
     """Service for user registration and approval workflow"""
+
+    @staticmethod
+    def _build_unique_username(db: Session, username_seed: str) -> str:
+        base = "".join(ch for ch in (username_seed or "") if ch.isalnum() or ch in {"_", "."}).strip("._")
+        base = (base or "user")[:40]
+
+        candidate = base
+        i = 1
+        while db.query(UserDB).filter(UserDB.username == candidate).first():
+            suffix = f"_{i}"
+            candidate = f"{base[: max(1, 50 - len(suffix))]}{suffix}"
+            i += 1
+        return candidate
+
+    @staticmethod
+    def _serialize_registration(user: UserDB, approver: UserDB | None = None) -> dict:
+        approver_name = None
+        if approver:
+            approver_name = approver.full_name or approver.username
+
+        return {
+            "user_id": user.user_id,
+            "username": user.username,
+            "email": user.email,
+            "full_name": user.full_name,
+            "phone": user.phone,
+            "user_type": user.user_type,
+            "status": user.status,
+            "is_email_verified": user.is_email_verified,
+            "created_at": user.created_at,
+            "approved_by": user.approved_by,
+            "approved_by_name": approver_name,
+            "approved_at": user.approved_at,
+            "rejection_reason": user.rejection_reason,
+        }
+
+    @staticmethod
+    def _frontend_verify_url(token: str) -> str:
+        base_url = settings.FRONTEND_BASE_URL.rstrip("/")
+        return f"{base_url}/auth/verify-email?token={token}"
+
+    @staticmethod
+    def _frontend_login_url() -> str:
+        base_url = settings.FRONTEND_BASE_URL.rstrip("/")
+        return f"{base_url}/auth?mode=login"
+
+    @staticmethod
+    def resend_verification_email(db: Session, email: str) -> Tuple[bool, str]:
+        normalized_email = (email or "").strip().lower()
+        if not normalized_email:
+            return False, "Email is required"
+
+        user = db.query(UserDB).filter(UserDB.email == normalized_email).first()
+        if not user:
+            return False, "Registration not found"
+
+        if user.is_email_verified:
+            return False, "Email already verified"
+
+        verification_token = secrets.token_urlsafe(32)
+        user.verification_token = verification_token
+        user.verification_sent_at = datetime.utcnow()
+
+        verification_url = RegistrationService._frontend_verify_url(verification_token)
+
+        email_sent = EmailService.send_verification_email(
+            recipient_email=user.email,
+            verification_token=verification_token,
+            verification_url=verification_url,
+            full_name=user.full_name,
+        )
+
+        if not email_sent:
+            db.rollback()
+            return False, "Could not send verification email"
+
+        log_action(
+            db,
+            user_id=user.user_id,
+            action="RESEND_VERIFICATION_EMAIL",
+            entity_type="UserRegistration",
+            entity_id=user.user_id,
+            new_value={
+                "email": user.email,
+                "verification_sent_at": user.verification_sent_at.isoformat() if user.verification_sent_at else None,
+            },
+        )
+        db.commit()
+        return True, f"Verification email sent again to {user.email}"
 
     @staticmethod
     def register_user(db: Session, request: UserRegistrationRequest) -> Tuple[bool, str, Optional[UserRegistrationResponse]]:
@@ -25,12 +117,10 @@ class RegistrationService:
         Returns: (success, message, response)
         """
         try:
-            # Check if username/email already exists (in User table)
-            existing_user = db.query(UserDB).filter(
-                (UserDB.username == request.username) | (UserDB.email == request.email)
-            ).first()
-            if existing_user:
-                return False, "Username or email already exists", None
+            normalized_email = (request.email or "").strip().lower()
+            existing_email = db.query(UserDB).filter(UserDB.email == normalized_email).first()
+            if existing_email:
+                return False, "Email already exists", None
 
             # Validate registration type
             if request.registration_type.lower() not in ["analyst", "manager"]:
@@ -38,6 +128,7 @@ class RegistrationService:
 
             # Hash password
             hashed_pwd = pwd_context.hash(request.password)
+            username = RegistrationService._build_unique_username(db, request.username)
 
             # Generate email verification token
             verification_token = secrets.token_urlsafe(32)
@@ -49,9 +140,9 @@ class RegistrationService:
 
             # Create user record in pending status
             user = UserDB(
-                username=request.username,
-                email=request.email,
-                password=hashed_pwd,
+                username=username,
+                email=normalized_email,
+                password_hash=hashed_pwd,
                 full_name=request.full_name,
                 phone=request.phone,
                 user_type=request.registration_type.lower(),
@@ -62,11 +153,25 @@ class RegistrationService:
             )
 
             db.add(user)
+            db.flush()
+            log_action(
+                db,
+                user_id=user.user_id,
+                action="REGISTER_USER",
+                entity_type="UserRegistration",
+                entity_id=user.user_id,
+                new_value={
+                    "username": user.username,
+                    "email": user.email,
+                    "user_type": user.user_type,
+                    "status": user.status,
+                },
+            )
             db.commit()
             db.refresh(user)
 
             # Build verification URL
-            verification_url = f"http://localhost:8000/api/v1/auth/register/verify-email?token={verification_token}"
+            verification_url = RegistrationService._frontend_verify_url(verification_token)
 
             # Send verification email
             email_sent = EmailService.send_verification_email(
@@ -86,7 +191,7 @@ class RegistrationService:
                 verification_token=verification_token,
                 verification_link=verification_url,
                 created_at=user.created_at,
-                message=f"Registration successful! Verification email sent to {request.email}. "
+                message=f"Registration successful! Verification email sent to {user.email}. "
                         f"Please click the link in the email to verify your account. "
                         f"For manager registration, admin approval will be required after email verification."
             )
@@ -119,14 +224,37 @@ class RegistrationService:
 
             user.is_email_verified = True
             user.verification_token = None
+            old_state = {
+                "status": user.status,
+                "is_email_verified": False,
+                "role_id": user.role_id,
+            }
 
             # For analyst: auto-approve after email verification
             if user.user_type == "analyst":
                 user.status = "approved"
                 # Assign analyst role
-                analyst_role = db.query(RoleDB).filter(RoleDB.role_name == "Analyst").first()
+                analyst_role = (
+                    db.query(RoleDB)
+                    .filter(RoleDB.role_name.in_(["risk analyst", "Risk Analyst", "analyst", "Analyst"]))
+                    .first()
+                )
                 if analyst_role:
                     user.role_id = analyst_role.role_id
+
+                log_action(
+                    db,
+                    user_id=user.user_id,
+                    action="VERIFY_EMAIL",
+                    entity_type="UserRegistration",
+                    entity_id=user.user_id,
+                    old_value=old_state,
+                    new_value={
+                        "status": user.status,
+                        "is_email_verified": user.is_email_verified,
+                        "role_id": user.role_id,
+                    },
+                )
                 
                 db.commit()
 
@@ -134,13 +262,26 @@ class RegistrationService:
                 EmailService.send_registration_approved_email(
                     recipient_email=user.email,
                     full_name=user.full_name,
-                    login_url="http://localhost:8000/docs"
+                    login_url=RegistrationService._frontend_login_url()
                 )
 
                 return True, "Email verified! Your analyst account is now active. Check your email for login instructions."
             else:
                 # Manager: email verified, awaiting admin approval
                 # Keep status as pending until admin approves
+                log_action(
+                    db,
+                    user_id=user.user_id,
+                    action="VERIFY_EMAIL",
+                    entity_type="UserRegistration",
+                    entity_id=user.user_id,
+                    old_value=old_state,
+                    new_value={
+                        "status": user.status,
+                        "is_email_verified": user.is_email_verified,
+                        "role_id": user.role_id,
+                    },
+                )
                 db.commit()
                 return True, "Email verified successfully! Your account is pending admin approval."
 
@@ -176,14 +317,39 @@ class RegistrationService:
                 if not user.is_email_verified:
                     return False, "Email must be verified before approval"
 
+                old_state = {
+                    "status": user.status,
+                    "role_id": user.role_id,
+                    "approved_by": user.approved_by,
+                    "approved_at": user.approved_at.isoformat() if user.approved_at else None,
+                }
                 user.status = "approved"
                 user.approved_by = approved_by
                 user.approved_at = datetime.utcnow()
                 
                 # Assign manager role
-                manager_role = db.query(RoleDB).filter(RoleDB.role_name == "Manager").first()
+                manager_role = (
+                    db.query(RoleDB)
+                    .filter(RoleDB.role_name.in_(["manager", "Manager"]))
+                    .first()
+                )
                 if manager_role:
                     user.role_id = manager_role.role_id
+
+                log_action(
+                    db,
+                    user_id=approved_by,
+                    action="APPROVE_REGISTRATION",
+                    entity_type="UserRegistration",
+                    entity_id=user.user_id,
+                    old_value=old_state,
+                    new_value={
+                        "status": user.status,
+                        "role_id": user.role_id,
+                        "approved_by": user.approved_by,
+                        "approved_at": user.approved_at.isoformat() if user.approved_at else None,
+                    },
+                )
 
                 db.commit()
 
@@ -191,7 +357,7 @@ class RegistrationService:
                 EmailService.send_registration_approved_email(
                     recipient_email=user.email,
                     full_name=user.full_name,
-                    login_url="http://localhost:8000/docs"
+                    login_url=RegistrationService._frontend_login_url()
                 )
 
                 return True, f"Registration approved for {user.username}. Approval email sent."
@@ -200,10 +366,31 @@ class RegistrationService:
                 if not rejection_reason:
                     return False, "Rejection reason required"
 
+                old_state = {
+                    "status": user.status,
+                    "rejection_reason": user.rejection_reason,
+                    "approved_by": user.approved_by,
+                    "approved_at": user.approved_at.isoformat() if user.approved_at else None,
+                }
                 user.status = "rejected"
                 user.rejection_reason = rejection_reason
                 user.approved_by = approved_by
                 user.approved_at = datetime.utcnow()
+
+                log_action(
+                    db,
+                    user_id=approved_by,
+                    action="REJECT_REGISTRATION",
+                    entity_type="UserRegistration",
+                    entity_id=user.user_id,
+                    old_value=old_state,
+                    new_value={
+                        "status": user.status,
+                        "rejection_reason": user.rejection_reason,
+                        "approved_by": user.approved_by,
+                        "approved_at": user.approved_at.isoformat() if user.approved_at else None,
+                    },
+                )
 
                 db.commit()
 
@@ -224,19 +411,36 @@ class RegistrationService:
             return False, f"Approval error: {str(e)}"
 
     @staticmethod
-    def get_pending_registrations(db: Session, user_type: Optional[str] = None) -> list:
-        """Get all pending user registrations (status=pending)"""
-        query = db.query(UserDB).filter(
-            UserDB.status == "pending",
-            UserDB.is_email_verified == True  # Only show verified but not yet approved
+    def list_registrations(db: Session, user_type: Optional[str] = None, status: Optional[str] = None) -> list[dict]:
+        """Get registrations for admin review filtered by type and status."""
+        approver_alias = aliased(UserDB)
+        effective_user_type = (user_type or "manager").strip().lower()
+        effective_status = (status or "all").strip().lower()
+
+        query = (
+            db.query(UserDB, approver_alias)
+            .outerjoin(approver_alias, approver_alias.user_id == UserDB.approved_by)
         )
-        if user_type:
-            query = query.filter(UserDB.user_type == user_type.lower())
-        return query.all()
+        if effective_user_type:
+            query = query.filter(UserDB.user_type == effective_user_type)
+        if effective_status != "all":
+            query = query.filter(UserDB.status == effective_status)
+
+        rows = query.order_by(UserDB.created_at.desc()).all()
+        return [RegistrationService._serialize_registration(user, approver) for user, approver in rows]
 
     @staticmethod
-    def get_registration_by_id(db: Session, user_id: int) -> Optional[UserDB]:
-        """Get registration by user ID"""
-        return db.query(UserDB).filter(
-            UserDB.user_id == user_id
-        ).first()
+    def get_registration_by_id(db: Session, user_id: int) -> Optional[dict]:
+        """Get registration by user ID."""
+        approver_alias = aliased(UserDB)
+        row = (
+            db.query(UserDB, approver_alias)
+            .outerjoin(approver_alias, approver_alias.user_id == UserDB.approved_by)
+            .filter(UserDB.user_id == user_id)
+            .first()
+        )
+        if not row:
+            return None
+
+        user, approver = row
+        return RegistrationService._serialize_registration(user, approver)

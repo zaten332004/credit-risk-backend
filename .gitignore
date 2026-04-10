@@ -14,3 +14,8 @@ apps/backend/__pycache__/
 apps/backend/.pytest_cache/
 apps/backend/data/raw/
 apps/backend/data/temp/
+# Runtime / local data (do not publish)
+apps/backend/.ai_chat_uploads/
+apps/backend/.exports/
+apps/backend/.powerbi_user_configs/
+apps/backend/.uploads/

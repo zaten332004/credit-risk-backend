@@ -4,6 +4,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Credit Risk Analysis Dashboard & Chatbot System"
     API_V1_PREFIX: str = "/api/v1"
+    FRONTEND_BASE_URL: str = "http://localhost:3000"
+    BACKEND_PUBLIC_BASE_URL: str = "http://localhost:8000"
 
     # Email Configuration
     SMTP_ENABLED: bool = False  # Set to True to enable real email sending
@@ -26,6 +28,9 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: str = ""
+    SECRET_KEY: str = ""
+    # JWT lifetime (minutes). Frontend enforces idle logout separately; keep this long enough for active work sessions.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080
 
     # AI providers
     ai_chat_provider: str = ""  # gemini|openai|langflow|mock
@@ -54,18 +59,18 @@ class Settings(BaseSettings):
     # Optional: custom DAX query to build AI context from Power BI directly.
     # If unset, context generation will return guidance instead of running hardcoded queries.
     power_bi_ai_context_dax: str = ""
-    # Approach A: fixed "contract" table name for AI context in Power BI dataset
-    power_bi_ai_context_table: str = "AI_Context"
+    # Contract / sampling hub table (align with loan portfolio semantic model, not AI_Context).
+    power_bi_ai_context_table: str = "LoanPortfolio"
     power_bi_ai_context_max_rows: int = 200
     power_bi_ai_context_max_chars: int = 4000
     # all_tables|contract_table
     power_bi_ai_context_mode: str = "all_tables"
-    # Optional comma-separated table list for semantic models where schema discovery is blocked.
-    power_bi_ai_context_tables: str = ""
+    # Department-style facts/dims (customer / loans / collateral), similar to loan_dataset CSV domains.
+    power_bi_ai_context_tables: str = "CustomerMaster,LoanPortfolio,CollateralRegister"
     power_bi_ai_context_max_tables: int = 12
     power_bi_ai_context_max_columns: int = 8
-    # Comma-separated list of keys expected in AI_Context (warn if missing).
-    power_bi_ai_context_required_keys: str = "DatasetName,DateRange"
+    # Optional comma-separated keys to warn if missing on contract_table (empty = skip check).
+    power_bi_ai_context_required_keys: str = ""
 
     # Optional: allow loading from .env without breaking when absent
     # IMPORTANT: extra="ignore" so unknown keys in .env won't crash startup.

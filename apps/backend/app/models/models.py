@@ -8,13 +8,28 @@ from pydantic import BaseModel
 
 
 class Customer(BaseModel):
-    id: int
-    name: str
+    customer_id: int
+    full_name: str
     age: int
-    income: float
+    monthly_income: float
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    company: Optional[str] = None
     credit_score: Optional[float] = None
+    employment_status: Optional[str] = None
+    loan_type: Optional[str] = None
+    requested_loan_amount: Optional[float] = None
+    requested_term_months: Optional[int] = None
+    annual_interest_rate: Optional[float] = None
     risk_level: Optional[str] = None
-    last_updated: datetime
+    application_status: Optional[str] = None
+    notes: Optional[str] = None
+    created_by: Optional[str] = None
+    approved_by: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+    employments: List[Dict[str, Any]] = []
 
 
 class RiskModelInfo(BaseModel):

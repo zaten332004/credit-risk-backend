@@ -5,12 +5,16 @@ from app.core.config import settings
 
 # Connection string should be provided via .env (DATABASE_URL).
 # Example:
-# mssql+pyodbc://sa:YourPassword@DESKTOP-7EPLMS3\\SQLEXPRESS/CreditRiskDB?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes
+# mysql+pymysql://root:your_password@localhost:3306/CreditRiskDB?charset=utf8mb4
 SQLALCHEMY_DATABASE_URL = (settings.DATABASE_URL or "").strip()
 if not SQLALCHEMY_DATABASE_URL:
     raise RuntimeError("DATABASE_URL is not configured. Please set DATABASE_URL in .env")
 
-engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
+engine_kwargs = {"pool_pre_ping": True}
+if SQLALCHEMY_DATABASE_URL.startswith("mysql"):
+    engine_kwargs["pool_recycle"] = 3600
+
+engine = create_engine(SQLALCHEMY_DATABASE_URL, **engine_kwargs)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

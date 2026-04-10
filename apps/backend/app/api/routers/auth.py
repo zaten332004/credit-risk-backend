@@ -15,10 +15,9 @@ async def login_for_access_token(body: LoginRequest) -> Token:
     Login endpoint - Get JWT token
     
     Credentials:
-    - admin / Admin123
-    - manager / Admin123
-    - analyst / Admin123
-    - tester / Admin123
+    - admin / Admin@123456
+    - manager / Manager@123456
+    - risk_analyst / RiskAnalyst@123456
     """
     try:
         user_dict = authenticate_user_by_username_or_email(body.username_or_email, body.password)

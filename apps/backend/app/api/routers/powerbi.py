@@ -8,16 +8,21 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_active_user
-from app.db.models import UserDB
 from app.db.session import get_db
+from app.core.config import settings
 from app.services.powerbi_service import powerbi_service
 from app.services.analytics_data_service import (
+    _dedupe_keep_order,
     _extract_table_names,
     _extract_column_names,
     _extract_execute_queries_rows,
 )
 
 router = APIRouter(prefix="/powerbi", tags=["Power BI Integration"])
+
+
+def _runtime_user(current_user: Any):
+    return powerbi_service.get_runtime_user(current_user)
 
 
 # =========================================================================
@@ -29,13 +34,18 @@ class PowerBIConfigRequest(BaseModel):
     workspace_id: str
     dataset_id: str
     tenant_id: Optional[str] = None
-    
+    workspace_name: Optional[str] = None
+    dataset_name: Optional[str] = None
+
     class Config:
+        # Chi OpenAPI/Swagger — khong phai default runtime, khong luu san cho user.
         json_schema_extra = {
             "example": {
-                "workspace_id": "f36e0f6d-410f-4ae3-8450-5fcebf90cc31",
-                "dataset_id": "550e8400-e29b-41d4-a716-446655440000",
-                "tenant_id": "72f988bf-86f1-41af-91ab-2d7cd011db47"
+                "workspace_id": "<workspace-guid>",
+                "dataset_id": "<dataset-guid>",
+                "tenant_id": "<azure-tenant-guid>",
+                "workspace_name": "<ten hien thi trong Power BI>",
+                "dataset_name": "<ten dataset trong Power BI>",
             }
         }
 
@@ -63,9 +73,12 @@ class PowerBIDatasetResponse(BaseModel):
 class PowerBIConnectionResponse(BaseModel):
     """Power BI connection status"""
     connected: bool
+    tenant_id: Optional[str] = None
     workspace_id: Optional[str] = None
     workspace_name: Optional[str] = None
     dataset_id: Optional[str] = None
+    dataset_name: Optional[str] = None
+    table_names: Optional[List[str]] = None
     last_sync: Optional[str] = None
     message: str
 
@@ -91,6 +104,10 @@ class PowerBITableSchema(BaseModel):
     sample_rows: List[Dict[str, Any]]
 
 
+class PowerBITableHintsRequest(BaseModel):
+    table_names: List[str] = []
+
+
 # =========================================================================
 # API Endpoints
 # =========================================================================
@@ -98,7 +115,7 @@ class PowerBITableSchema(BaseModel):
 @router.post("/configure", response_model=dict)
 async def configure_powerbi(
     config: PowerBIConfigRequest,
-    current_user: UserDB = Depends(get_current_active_user),
+    current_user: Any = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -112,22 +129,23 @@ async def configure_powerbi(
             user=current_user,
             workspace_id=config.workspace_id,
             dataset_id=config.dataset_id,
-            tenant_id=config.tenant_id
+            tenant_id=config.tenant_id,
+            workspace_name=config.workspace_name,
+            dataset_name=config.dataset_name,
         )
-        
         if not success:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to configure Power BI"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to persist Power BI config"
             )
-        
         return {
             "success": True,
             "message": "Power BI workspace configured successfully",
             "workspace_id": config.workspace_id,
             "dataset_id": config.dataset_id
         }
-        
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -135,9 +153,48 @@ async def configure_powerbi(
         )
 
 
+@router.get("/status", response_model=PowerBIConnectionResponse)
+async def get_powerbi_status(
+    current_user: Any = Depends(get_current_active_user),
+):
+    runtime_user = _runtime_user(current_user)
+    connected = bool(
+        runtime_user.power_bi_enabled
+        and runtime_user.power_bi_workspace_id
+        and runtime_user.power_bi_dataset_id
+    )
+    return PowerBIConnectionResponse(
+        connected=connected,
+        tenant_id=runtime_user.power_bi_tenant_id,
+        workspace_id=runtime_user.power_bi_workspace_id,
+        workspace_name=getattr(runtime_user, "power_bi_workspace_name", None),
+        dataset_id=runtime_user.power_bi_dataset_id,
+        dataset_name=getattr(runtime_user, "power_bi_dataset_name", None),
+        table_names=getattr(runtime_user, "power_bi_table_names", None) or [],
+        last_sync=runtime_user.power_bi_last_sync.isoformat() if runtime_user.power_bi_last_sync else None,
+        message="Power BI da duoc cau hinh cho tai khoan nay." if connected else "Power BI chua duoc cau hinh.",
+    )
+
+
+@router.post("/table-hints", response_model=dict)
+async def save_powerbi_table_hints(
+    request: PowerBITableHintsRequest,
+    current_user: Any = Depends(get_current_active_user),
+):
+    runtime_user = _runtime_user(current_user)
+    if not runtime_user.power_bi_workspace_id or not runtime_user.power_bi_dataset_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Power BI workspace/dataset not configured for this user",
+        )
+
+    saved = powerbi_service.update_user_powerbi_table_names(current_user, request.table_names)
+    return {"success": True, "table_names": saved}
+
+
 @router.get("/test-connection", response_model=PowerBIConnectionResponse)
 async def test_powerbi_connection(
-    current_user: UserDB = Depends(get_current_active_user),
+    current_user: Any = Depends(get_current_active_user),
 ):
     """
     Test Power BI connection using the backend's configured workspace/dataset.
@@ -166,6 +223,7 @@ async def test_powerbi_connection(
         workspace_id=None,
         workspace_name=None,
         dataset_id=None,
+        dataset_name=None,
         last_sync=None,
         message=message,
     )
@@ -173,12 +231,12 @@ async def test_powerbi_connection(
 
 @router.get("/workspaces", response_model=list)
 async def get_powerbi_workspaces(
-    current_user: UserDB = Depends(get_current_active_user)
+    current_user: Any = Depends(get_current_active_user)
 ):
     """
     Get all Power BI workspaces accessible to current user
     """
-    workspaces = powerbi_service.get_workspaces(current_user)
+    workspaces = powerbi_service.get_workspaces(_runtime_user(current_user))
     
     if workspaces is None:
         raise HTTPException(
@@ -198,18 +256,19 @@ async def get_powerbi_workspaces(
 
 @router.get("/datasets", response_model=list)
 async def get_powerbi_datasets(
-    current_user: UserDB = Depends(get_current_active_user)
+    current_user: Any = Depends(get_current_active_user)
 ):
     """
     Get all datasets in user's configured workspace
     """
-    if not current_user.power_bi_workspace_id:
+    runtime_user = _runtime_user(current_user)
+    if not runtime_user.power_bi_workspace_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Power BI workspace not configured"
         )
     
-    datasets = powerbi_service.get_datasets(current_user)
+    datasets = powerbi_service.get_datasets(runtime_user)
     
     if datasets is None:
         raise HTTPException(
@@ -229,7 +288,7 @@ async def get_powerbi_datasets(
 
 @router.get("/risk-data", response_model=dict)
 async def get_powerbi_risk_data(
-    current_user: UserDB = Depends(get_current_active_user),
+    current_user: Any = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -239,13 +298,14 @@ async def get_powerbi_risk_data(
     - Default rate
     - Portfolio exposure
     """
-    if not current_user.power_bi_enabled:
+    runtime_user = _runtime_user(current_user)
+    if not runtime_user.power_bi_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Power BI not configured for this user"
         )
     
-    risk_data = powerbi_service.get_risk_data(current_user)
+    risk_data = powerbi_service.get_risk_data(runtime_user)
     
     if risk_data is None:
         raise HTTPException(
@@ -254,19 +314,18 @@ async def get_powerbi_risk_data(
         )
     
     # Update last sync timestamp
-    current_user.power_bi_last_sync = __import__("datetime").datetime.utcnow()
-    db.commit()
+    last_sync = powerbi_service.update_runtime_user_last_sync(current_user)
     
     return {
         "success": True,
         "data": risk_data,
-        "timestamp": current_user.power_bi_last_sync.isoformat()
+        "timestamp": last_sync
     }
 
 
 @router.get("/portfolio-metrics", response_model=dict)
 async def get_powerbi_portfolio_metrics(
-    current_user: UserDB = Depends(get_current_active_user),
+    current_user: Any = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -277,13 +336,14 @@ async def get_powerbi_portfolio_metrics(
     - Default rate percentage
     - Average risk score
     """
-    if not current_user.power_bi_enabled:
+    runtime_user = _runtime_user(current_user)
+    if not runtime_user.power_bi_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Power BI not configured for this user"
         )
     
-    metrics = powerbi_service.get_portfolio_metrics(current_user)
+    metrics = powerbi_service.get_portfolio_metrics(runtime_user)
     
     if metrics is None:
         raise HTTPException(
@@ -292,20 +352,19 @@ async def get_powerbi_portfolio_metrics(
         )
     
     # Update last sync timestamp
-    current_user.power_bi_last_sync = __import__("datetime").datetime.utcnow()
-    db.commit()
+    last_sync = powerbi_service.update_runtime_user_last_sync(current_user)
     
     return {
         "success": True,
         "metrics": metrics,
-        "timestamp": current_user.power_bi_last_sync.isoformat()
+        "timestamp": last_sync
     }
 
 
 @router.get("/customer/{customer_id}/risk-profile", response_model=dict)
 async def get_customer_risk_profile(
     customer_id: int,
-    current_user: UserDB = Depends(get_current_active_user)
+    current_user: Any = Depends(get_current_active_user)
 ):
     """
     Get specific customer's risk profile from Power BI
@@ -316,13 +375,14 @@ async def get_customer_risk_profile(
     - Loan history
     - Default history
     """
-    if not current_user.power_bi_enabled:
+    runtime_user = _runtime_user(current_user)
+    if not runtime_user.power_bi_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Power BI not configured for this user"
         )
     
-    profile = powerbi_service.get_customer_risk_profile(current_user, customer_id)
+    profile = powerbi_service.get_customer_risk_profile(runtime_user, customer_id)
     
     if profile is None:
         raise HTTPException(
@@ -339,47 +399,44 @@ async def get_customer_risk_profile(
 
 @router.post("/refresh-dataset", response_model=dict)
 async def refresh_powerbi_dataset(
-    current_user: UserDB = Depends(get_current_active_user)
+    current_user: Any = Depends(get_current_active_user)
 ):
     """
     Trigger Power BI dataset refresh
     """
-    if not current_user.power_bi_enabled:
+    runtime_user = _runtime_user(current_user)
+    if not runtime_user.power_bi_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Power BI not configured for this user"
         )
     
-    success = powerbi_service.refresh_dataset(current_user)
+    success = powerbi_service.refresh_dataset(runtime_user)
     
     if not success:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to trigger dataset refresh"
         )
-    
+
+    last_sync = powerbi_service.update_runtime_user_last_sync(current_user)
     return {
         "success": True,
-        "message": "Dataset refresh triggered successfully"
+        "message": "Dataset refresh triggered successfully",
+        "last_sync": last_sync,
     }
 
 
 @router.delete("/disconnect", response_model=dict)
 async def disconnect_powerbi(
-    current_user: UserDB = Depends(get_current_active_user),
+    current_user: Any = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """
     Disconnect Power BI from user account
     """
     try:
-        current_user.power_bi_enabled = False
-        current_user.power_bi_workspace_id = None
-        current_user.power_bi_dataset_id = None
-        current_user.power_bi_tenant_id = None
-        current_user.power_bi_api_key = None
-        
-        db.commit()
+        powerbi_service.clear_user_powerbi_config(current_user)
         
         return {
             "success": True,
@@ -387,7 +444,6 @@ async def disconnect_powerbi(
         }
 
     except Exception as e:
-        db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error disconnecting Power BI: {str(e)}"
@@ -398,9 +454,29 @@ def _escape_dax_table_name(name: str) -> str:
     return (name or "").replace("'", "''")
 
 
+def _manual_powerbi_table_names() -> List[str]:
+    raw = (getattr(settings, "power_bi_ai_context_tables", "") or "").strip()
+    names = [item.strip() for item in raw.split(",") if item.strip()]
+    default_table = (getattr(settings, "power_bi_ai_context_table", "") or "").strip()
+    if default_table:
+        names.append(default_table)
+    return _dedupe_keep_order(names)
+
+
+def _runtime_or_manual_powerbi_table_names(runtime_user: Any) -> List[str]:
+    runtime_names = [
+        str(item).strip()
+        for item in (getattr(runtime_user, "power_bi_table_names", None) or [])
+        if str(item).strip()
+    ]
+    if runtime_names:
+        return _dedupe_keep_order(runtime_names)
+    return _manual_powerbi_table_names()
+
+
 @router.get("/schema", response_model=dict)
 async def get_powerbi_schema(
-    current_user: UserDB = Depends(get_current_active_user),
+    current_user: Any = Depends(get_current_active_user),
 ):
     """
     Trả về schema của toàn bộ dataset Power BI (bảng, cột, sample rows).
@@ -408,15 +484,37 @@ async def get_powerbi_schema(
     - Dùng cấu hình global từ backend (.env): TENANT / WORKSPACE / DATASET.
     - Không phụ thuộc các trường PowerBI trên bảng User.
     """
-    tables_resp = powerbi_service.get_dataset_tables_global_verbose()
-    if not tables_resp.get("ok"):
+    runtime_user = _runtime_user(current_user)
+    if not runtime_user.power_bi_workspace_id or not runtime_user.power_bi_dataset_id:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list tables from Power BI (stage={tables_resp.get('stage')}): "
-            f"{(tables_resp.get('error') or tables_resp.get('body') or 'unknown error')}",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Power BI workspace/dataset not configured for this user",
         )
 
-    table_names = _extract_table_names(tables_resp.get("result") or {})
+    tables_resp = powerbi_service.get_dataset_tables_verbose(runtime_user)
+    table_names: List[str] = []
+    discovered_via_api = bool(tables_resp.get("ok"))
+    if discovered_via_api:
+        table_names = _extract_table_names(tables_resp.get("result") or {})
+        if not table_names:
+            ds = (getattr(runtime_user, "power_bi_dataset_id", None) or "").strip()
+            fb = powerbi_service.dataset_tables_dax_fallback(runtime_user, ds)
+            if fb.get("ok"):
+                tables_resp = fb
+                table_names = _extract_table_names(fb.get("result") or {})
+    else:
+        table_names = _runtime_or_manual_powerbi_table_names(runtime_user)
+        if not table_names:
+            return {
+                "ok": False,
+                "tables": [],
+                "schemas": [],
+                "errors": {},
+                "requires_table_hints": True,
+                "message": "Schema auto-discovery is blocked for this dataset. Save table hints to continue.",
+                "discovery_stage": tables_resp.get("stage"),
+                "discovery_error": (tables_resp.get("error") or tables_resp.get("body") or "unknown error"),
+            }
     if not table_names:
         return {
             "ok": False,
@@ -430,7 +528,7 @@ async def get_powerbi_schema(
     max_rows = 10
 
     for name in table_names[:max_tables]:
-        cols_resp = powerbi_service.get_table_columns_global_verbose(name)
+        cols_resp = powerbi_service.get_table_columns_verbose(runtime_user, name)
         columns: List[str] = []
         if cols_resp.get("ok"):
             columns = _extract_column_names(cols_resp.get("result") or {})
@@ -438,7 +536,7 @@ async def get_powerbi_schema(
         # Sample rows (best-effort)
         escaped = _escape_dax_table_name(name)
         dax = f"EVALUATE TOPN({max_rows}, '{escaped}')"
-        sample_resp = powerbi_service.execute_dax_query_global_verbose(dax)
+        sample_resp = powerbi_service.execute_dax_query_verbose(runtime_user, dax)
         rows: List[Dict[str, Any]] = []
         if sample_resp.get("ok"):
             rows = _extract_execute_queries_rows(sample_resp.get("result") or {})
@@ -457,7 +555,9 @@ async def get_powerbi_schema(
 
     return {
         "ok": True,
-        "tables": [s.name for s in schemas],
+        "tables": table_names,
         "schemas": [s.model_dump() for s in schemas],
         "errors": errors,
+        "table_list_source": "api" if discovered_via_api else "saved_hints",
+        "schema_sample_limit": max_tables,
     }

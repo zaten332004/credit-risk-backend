@@ -1,55 +1,41 @@
-#!/usr/bin/env python3
-"""Check User_Registration table"""
-import pyodbc
+"""Inspect registration-related rows in the MySQL User table."""
 
-conn = pyodbc.connect(
-    'Driver={ODBC Driver 18 for SQL Server};'
-    'Server=DESKTOP-7EPLMS3\\SQLEXPRESS;'
-    'Database=CreditRiskDB;'
-    'UID=sa;'
-    'PWD=12345;'
-    'Encrypt=no;'
-)
+import sys
+from pathlib import Path
 
-cursor = conn.cursor()
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# Get all registrations
-print("📋 All User Registrations:")
-cursor.execute("SELECT registration_id, username, email, status FROM User_Registration ORDER BY created_at DESC")
+from sqlalchemy import text
 
-rows = cursor.fetchall()
-if rows:
+from app.db.session import engine
+
+USERNAME = "zaten"
+EMAIL = "nhutpham0303@gmail.com"
+
+
+with engine.connect() as connection:
+    rows = connection.execute(
+        text(
+            """
+            SELECT user_id, username, email, status, user_type, is_email_verified
+            FROM `User`
+            ORDER BY created_at DESC
+            """
+        )
+    ).fetchall()
+    print("All User registrations:")
     for row in rows:
-        print(f"  ID: {row[0]}, Username: {row[1]}, Email: {row[2]}, Status: {row[3]}")
-else:
-    print("  (Empty)")
+        print(f"  ID={row[0]}, Username={row[1]}, Email={row[2]}, Status={row[3]}, Type={row[4]}, Verified={row[5]}")
 
-# Check specific user
-print("\n🔍 Checking for 'zaten' / 'nhutpham0303@gmail.com':")
-cursor.execute("""
-    SELECT registration_id, username, email, status 
-    FROM User_Registration 
-    WHERE username = ? OR email = ?
-""", ('zaten', 'nhutpham0303@gmail.com'))
-
-result = cursor.fetchone()
-if result:
-    print(f"  FOUND: ID={result[0]}, Username={result[1]}, Email={result[2]}, Status={result[3]}")
-else:
-    print("  NOT FOUND in User_Registration")
-
-# Check User table
-print("\n🔍 Checking User table:")
-cursor.execute("""
-    SELECT user_id, username, email 
-    FROM [User] 
-    WHERE username = ? OR email = ?
-""", ('zaten', 'nhutpham0303@gmail.com'))
-
-result = cursor.fetchone()
-if result:
-    print(f"  FOUND: user_id={result[0]}, username={result[1]}, email={result[2]}")
-else:
-    print("  NOT FOUND in User table")
-
-conn.close()
+    row = connection.execute(
+        text(
+            """
+            SELECT user_id, username, email, status
+            FROM `User`
+            WHERE username = :username OR email = :email
+            """
+        ),
+        {"username": USERNAME, "email": EMAIL},
+    ).fetchone()
+    print("\nLookup result:")
+    print(row if row else "  NOT FOUND")

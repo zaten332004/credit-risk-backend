@@ -19,7 +19,16 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from sqlalchemy.orm import Session
 
-from app.db.models import ChatHistoryDB, ChatSessionDB, ChatSessionPinDB
+from app.db.models import ChatHistoryDB, ChatSessionDB
+from app.services.chat_session_metadata import (
+    build_message_with_attachments,
+    build_session_metadata,
+    extract_message_attachments,
+    fetch_chat_session_names,
+    fetch_pinned_session_ids,
+    strip_session_metadata,
+    update_chat_session_name,
+)
 
 
 @dataclass
@@ -65,9 +74,7 @@ class LangflowAIChatService:
                 "Xin chào! Mình có thể hỗ trợ phân tích rủi ro tín dụng, portfolio và dữ liệu Power BI."
             )
 
-            meta = f"[SESSION_NAME]{session_name}[/SESSION_NAME]"
-            if initial_context:
-                meta += f"\n[INITIAL_CONTEXT]{initial_context}[/INITIAL_CONTEXT]"
+            meta = build_session_metadata(session_name=session_name, initial_context=initial_context)
 
             session.add(
                 ChatHistoryDB(
@@ -78,6 +85,8 @@ class LangflowAIChatService:
                     created_at=now,
                 )
             )
+            session.flush()
+            update_chat_session_name(session, session_id, session_name)
             session.commit()
             return session_id, greeting
         except Exception as e:
@@ -111,7 +120,10 @@ class LangflowAIChatService:
                 ChatHistoryDB(
                     session_id=sid,
                     user_id=user_id,
-                    message=enhanced_message,
+                    message=build_message_with_attachments(
+                        message,
+                        customer_context.get("uploaded_files") if isinstance(customer_context, dict) else None,
+                    ),
                     bot_response=text,
                     created_at=now,
                 )
@@ -175,8 +187,17 @@ class LangflowAIChatService:
         )
         out: List[Dict] = []
         for m in messages:
-            if m.message:
-                out.append({"role": "user", "content": m.message, "timestamp": m.created_at.isoformat()})
+            clean_message = (strip_session_metadata(m.message) or "").strip()
+            attachments = extract_message_attachments(m.message)
+            if clean_message or attachments:
+                out.append(
+                    {
+                        "role": "user",
+                        "content": clean_message,
+                        "timestamp": m.created_at.isoformat(),
+                        "attachments": attachments,
+                    }
+                )
             if m.bot_response:
                 out.append({"role": "assistant", "content": m.bot_response, "timestamp": m.created_at.isoformat()})
         return out
@@ -191,9 +212,10 @@ class LangflowAIChatService:
         assistant_messages = len([m for m in messages if m.bot_response])
         chat_session.last_interaction = datetime.utcnow()
         session.commit()
+        session_name = fetch_chat_session_names(session, [sid]).get(sid)
         return {
             "session_id": sid,
-            "session_name": f"Session {sid[:8]}",
+            "session_name": session_name or f"Session {sid[:8]}",
             "duration": None,
             "user_messages": user_messages,
             "assistant_messages": assistant_messages,
@@ -208,18 +230,14 @@ class LangflowAIChatService:
             .order_by(ChatSessionDB.created_at.desc())
             .all()
         )
-        pinned_ids = set()
-        try:
-            pinned_rows = session.query(ChatSessionPinDB.session_id).filter(ChatSessionPinDB.user_id == user_id).all()
-            pinned_ids = {str(r[0]) for r in pinned_rows}
-        except Exception:
-            pinned_ids = set()
+        pinned_ids = fetch_pinned_session_ids(session, user_id, [str(s.session_id) for s in sessions])
 
         sessions = sorted(sessions, key=lambda s: (0 if str(s.session_id) in pinned_ids else 1,))
+        session_names = fetch_chat_session_names(session, [str(s.session_id) for s in sessions])
         return [
             {
                 "session_id": str(s.session_id),
-                "session_name": f"Session {str(s.session_id)[:8]}",
+                "session_name": session_names.get(str(s.session_id)) or f"Session {str(s.session_id)[:8]}",
                 "is_active": True,
                 "is_pinned": str(s.session_id) in pinned_ids,
                 "created_at": s.created_at.isoformat(),

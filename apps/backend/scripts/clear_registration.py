@@ -1,28 +1,23 @@
-#!/usr/bin/env python3
-"""Clear old registration for testing"""
-import pyodbc
+"""Delete a user registration record from the MySQL User table."""
 
-conn = pyodbc.connect(
-    'Driver={ODBC Driver 18 for SQL Server};'
-    'Server=DESKTOP-7EPLMS3\\SQLEXPRESS;'
-    'Database=CreditRiskDB;'
-    'UID=sa;'
-    'PWD=12345;'
-    'Encrypt=no;'
-)
+import sys
+from pathlib import Path
 
-cursor = conn.cursor()
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# Delete old registration
-print("🗑️  Deleting old registration for 'zaten'...")
-cursor.execute("DELETE FROM User_Registration WHERE username = ?", ('zaten',))
-conn.commit()
+from sqlalchemy import text
 
-print("✅ Deleted!")
+from app.db.session import engine
 
-# Verify
-cursor.execute("SELECT COUNT(*) FROM User_Registration WHERE username = ?", ('zaten',))
-count = cursor.fetchone()[0]
-print(f"Remaining 'zaten' records: {count}")
+USERNAME = "zaten"
 
-conn.close()
+
+with engine.connect() as connection:
+    connection.execute(text("DELETE FROM `User` WHERE username = :username"), {"username": USERNAME})
+    connection.commit()
+
+    remaining = connection.execute(
+        text("SELECT COUNT(*) FROM `User` WHERE username = :username"),
+        {"username": USERNAME},
+    ).scalar()
+    print(f"Remaining '{USERNAME}' records: {remaining}")
