@@ -1410,6 +1410,25 @@ def update_upload_job(job_id: str, *, status: Optional[str] = None, progress: Op
 
 def set_upload_job_content(job_id: str, payload: Dict[str, Any]) -> None:
     _upload_job_contents[job_id] = payload
+    # Persist import_summary next to the uploaded file so /jobs/{id}/errors still works after a process restart (Railway).
+    import_summary = payload.get("import_summary")
+    if import_summary is not None:
+        meta_path = _UPLOAD_STORAGE_DIR / f"{job_id}.json"
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                if not isinstance(meta, dict):
+                    meta = {}
+            except Exception:
+                meta = {}
+            meta["import_summary"] = import_summary
+            try:
+                meta_path.write_text(
+                    json.dumps(meta, ensure_ascii=False, default=str),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
 
 
 def _normalize_upload_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1475,6 +1494,9 @@ def get_upload_job_content(job_id: str) -> Optional[Dict[str, Any]]:
             "rows": extracted["full_rows"],
             "context_text": extracted["context_text"],
         }
+        summary = meta.get("import_summary")
+        if isinstance(summary, dict):
+            payload["import_summary"] = summary
         payload = _normalize_upload_payload(payload)
         _upload_job_contents[job_id] = payload
         return payload

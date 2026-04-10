@@ -12,6 +12,7 @@ python-multipart==0.0.9
 # Data / ML (basic credit-risk scoring demo)
 numpy==2.4.1
 pandas==2.3.3
+openpyxl==3.1.5
 scikit-learn==1.8.0
 
 # AWS (for future integration)

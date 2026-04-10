@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import unicodedata
 
 import pandas as pd
-from sqlalchemy import desc, or_
+from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import selectinload
 
 from app.db.models import (
