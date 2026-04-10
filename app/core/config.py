@@ -9,7 +9,10 @@ class Settings(BaseSettings):
 
     # Email Configuration
     SMTP_ENABLED: bool = False  # Set to True to enable real email sending
-    EMAIL_BACKEND: str = "console"  # Options: console, smtp, mailgun
+    EMAIL_BACKEND: str = "console"  # Options: console, smtp, mailgun, resend
+
+    # Resend (HTTPS API — works on Railway where outbound SMTP is often blocked)
+    RESEND_API_KEY: str = ""
 
     # SMTP Configuration (for traditional email)
     SMTP_SERVER: str = "smtp.gmail.com"

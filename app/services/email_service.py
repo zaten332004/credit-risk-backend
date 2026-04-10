@@ -1,7 +1,7 @@
 """
 Email Service
 Handles sending verification emails, approval notifications, etc.
-Supports: Console (demo), SMTP (Gmail, Outlook, etc.), Mailgun API
+Supports: Console (demo), SMTP (often blocked on Railway), Mailgun API, Resend API
 """
 import smtplib
 import requests
@@ -17,6 +17,103 @@ class EmailService:
 
     SMTP_TIMEOUT_SECONDS = 8
     MAILGUN_TIMEOUT_SECONDS = 8
+    RESEND_TIMEOUT_SECONDS = 8
+
+    @staticmethod
+    def _display_name(full_name: str | None) -> str:
+        name = (full_name or "").strip()
+        return name or "User"
+
+    @staticmethod
+    def _normalize_from_address(raw_from: str | None) -> str:
+        value = (raw_from or "").strip()
+        if not value:
+            return "Credit Risk <noreply@creditrisk.com>"
+        if "<" in value and ">" in value:
+            return value
+        if "@" in value:
+            return f"Credit Risk <{value}>"
+        return value
+
+    @staticmethod
+    def _build_email_html(
+        *,
+        title: str,
+        greeting: str,
+        intro: str,
+        action_label: str | None = None,
+        action_url: str | None = None,
+        code: str | None = None,
+        note: str | None = None,
+        extra_html: str | None = None,
+    ) -> str:
+        action_html = ""
+        if action_label and action_url:
+            action_html = f"""
+            <p style="text-align:center; margin:24px 0;">
+                <a href="{action_url}" style="background:#1f6feb; color:#ffffff; text-decoration:none; padding:10px 18px; border-radius:8px; display:inline-block; font-weight:600;">
+                    {action_label}
+                </a>
+            </p>
+            <p style="word-break:break-all; background:#f6f8fa; padding:10px 12px; border-radius:8px; color:#475467; font-size:13px;">
+                {action_url}
+            </p>
+            """
+
+        code_html = ""
+        if code:
+            code_html = f"""
+            <div style="margin:24px 0; text-align:center;">
+                <span style="display:inline-block; letter-spacing:6px; font-size:28px; font-weight:700; padding:12px 18px; background:#f6f8fa; border:1px solid #e5e7eb; border-radius:10px;">
+                    {code}
+                </span>
+            </div>
+            """
+
+        note_html = f'<p style="color:#667085; font-size:12px; margin-top:16px;">{note}</p>' if note else ""
+        extra = extra_html or ""
+
+        return f"""
+        <html>
+            <body style="font-family:Arial, Helvetica, sans-serif; background:#f2f4f7; margin:0; padding:24px; color:#101828;">
+                <div style="max-width:640px; margin:0 auto; background:#ffffff; border:1px solid #eaecf0; border-radius:12px; padding:24px;">
+                    <p style="margin:0 0 8px; color:#475467; font-size:12px; letter-spacing:.04em; text-transform:uppercase;">Credit Risk Management System</p>
+                    <h2 style="margin:0 0 16px; font-size:22px; color:#101828;">{title}</h2>
+                    <p style="margin:0 0 12px;">{greeting}</p>
+                    <p style="margin:0 0 8px; color:#344054;">{intro}</p>
+                    {code_html}
+                    {action_html}
+                    {extra}
+                    {note_html}
+                    <hr style="border:none; border-top:1px solid #eaecf0; margin:24px 0 12px;">
+                    <p style="margin:0; color:#98a2b3; font-size:12px;">This is an automated email from Credit Risk Management System.</p>
+                </div>
+            </body>
+        </html>
+        """
+
+    @staticmethod
+    def _build_email_text(
+        *,
+        title: str,
+        greeting: str,
+        intro: str,
+        action_url: str | None = None,
+        code: str | None = None,
+        note: str | None = None,
+        extra_lines: list[str] | None = None,
+    ) -> str:
+        lines: list[str] = [title, "", greeting, "", intro]
+        if code:
+            lines.extend(["", f"Code: {code}"])
+        if action_url:
+            lines.extend(["", f"Link: {action_url}"])
+        if extra_lines:
+            lines.extend([""] + extra_lines)
+        if note:
+            lines.extend(["", note])
+        lines.extend(["", "Credit Risk Management System"])
+        return "\n".join(lines)
 
     @staticmethod
     def send_verification_email(
@@ -38,61 +135,22 @@ class EmailService:
             True if sent successfully, False otherwise
         """
         try:
-            subject = "Email Verification - Credit Risk Management System"
-            
-            # HTML body
-            html_body = f"""
-            <html>
-                <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                    <div style="max-width: 600px; margin: 0 auto; border: 1px solid #ddd; padding: 20px; border-radius: 5px;">
-                        <h2 style="color: #2c3e50;">Email Verification</h2>
-                        
-                        <p>Hello {full_name or 'User'},</p>
-                        
-                        <p>Thank you for registering with our Credit Risk Management System. To complete your registration, please verify your email address by clicking the link below:</p>
-                        
-                        <p style="text-align: center; margin: 30px 0;">
-                            <a href="{verification_url}" 
-                               style="background-color: #3498db; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">
-                                Verify Email
-                            </a>
-                        </p>
-                        
-                        <p>Or copy and paste this link in your browser:</p>
-                        <p style="word-break: break-all; background-color: #f5f5f5; padding: 10px; border-radius: 3px;">
-                            {verification_url}
-                        </p>
-                        
-                        <p style="color: #666; font-size: 12px;">
-                            This link will expire in 24 hours. If you didn't create this account, please ignore this email.
-                        </p>
-                        
-                        <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
-                        
-                        <p style="color: #999; font-size: 12px; text-align: center;">
-                            Credit Risk Management System<br>
-                            © 2026. All rights reserved.
-                        </p>
-                    </div>
-                </body>
-            </html>
-            """
-            
-            # Plain text fallback
-            text_body = f"""
-Email Verification
-
-Hello {full_name or 'User'},
-
-Thank you for registering with our Credit Risk Management System. To complete your registration, please verify your email address by visiting this link:
-
-{verification_url}
-
-This link will expire in 24 hours. If you didn't create this account, please ignore this email.
-
-Best regards,
-Credit Risk Management System
-            """
+            subject = "Verify your email - Credit Risk"
+            html_body = EmailService._build_email_html(
+                title="Email verification required",
+                greeting=f"Hello {EmailService._display_name(full_name)},",
+                intro="Thank you for registering. Please verify your email to activate your account.",
+                action_label="Verify email",
+                action_url=verification_url,
+                note="This link expires in 24 hours. If you did not sign up, you can safely ignore this message.",
+            )
+            text_body = EmailService._build_email_text(
+                title="Email verification",
+                greeting=f"Hello {EmailService._display_name(full_name)},",
+                intro="Please verify your email to activate your account.",
+                action_url=verification_url,
+                note="This link expires in 24 hours.",
+            )
             
             return EmailService._send_email(
                 recipient_email=recipient_email,
@@ -112,37 +170,21 @@ Credit Risk Management System
         full_name: str | None = None,
     ) -> bool:
         try:
-            subject = "Email Change Verification Code - Credit Risk Management System"
-
-            html_body = f"""
-            <html>
-                <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                    <div style="max-width: 600px; margin: 0 auto; border: 1px solid #ddd; padding: 20px; border-radius: 5px;">
-                        <h2 style="color: #2c3e50;">Email Change Verification</h2>
-                        <p>Hello {full_name or 'User'},</p>
-                        <p>Use the verification code below to confirm your new email address:</p>
-                        <div style="margin: 30px 0; text-align: center;">
-                            <div style="display: inline-block; letter-spacing: 6px; font-size: 28px; font-weight: bold; padding: 12px 18px; background-color: #f5f7fb; border-radius: 8px; border: 1px solid #d7e0ef;">
-                                {verification_code}
-                            </div>
-                        </div>
-                        <p style="color: #666; font-size: 12px;">This code will expire in 10 minutes. If you did not request this change, please ignore this email.</p>
-                    </div>
-                </body>
-            </html>
-            """
-
-            text_body = f"""
-Email Change Verification
-
-Hello {full_name or 'User'},
-
-Use this verification code to confirm your new email address:
-
-{verification_code}
-
-This code will expire in 10 minutes. If you did not request this change, please ignore this email.
-            """
+            subject = "Email change code - Credit Risk"
+            html_body = EmailService._build_email_html(
+                title="Confirm your new email address",
+                greeting=f"Hello {EmailService._display_name(full_name)},",
+                intro="Use the verification code below to complete your email change request.",
+                code=verification_code,
+                note="This code expires in 10 minutes. If you did not request this change, please ignore this message.",
+            )
+            text_body = EmailService._build_email_text(
+                title="Email change verification",
+                greeting=f"Hello {EmailService._display_name(full_name)},",
+                intro="Use the code below to confirm your new email address.",
+                code=verification_code,
+                note="This code expires in 10 minutes.",
+            )
 
             return EmailService._send_email(
                 recipient_email=recipient_email,
@@ -161,37 +203,21 @@ This code will expire in 10 minutes. If you did not request this change, please 
         full_name: str | None = None,
     ) -> bool:
         try:
-            subject = "Password Reset Verification Code - Credit Risk Management System"
-
-            html_body = f"""
-            <html>
-                <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                    <div style="max-width: 600px; margin: 0 auto; border: 1px solid #ddd; padding: 20px; border-radius: 5px;">
-                        <h2 style="color: #2c3e50;">Password Reset</h2>
-                        <p>Hello {full_name or 'User'},</p>
-                        <p>Use the verification code below to reset your password:</p>
-                        <div style="margin: 30px 0; text-align: center;">
-                            <div style="display: inline-block; letter-spacing: 6px; font-size: 28px; font-weight: bold; padding: 12px 18px; background-color: #f5f7fb; border-radius: 8px; border: 1px solid #d7e0ef;">
-                                {verification_code}
-                            </div>
-                        </div>
-                        <p style="color: #666; font-size: 12px;">This code will expire in 10 minutes. If you did not request a password reset, please ignore this email.</p>
-                    </div>
-                </body>
-            </html>
-            """
-
-            text_body = f"""
-Password Reset
-
-Hello {full_name or 'User'},
-
-Use this verification code to reset your password:
-
-{verification_code}
-
-This code will expire in 10 minutes. If you did not request a password reset, please ignore this email.
-            """
+            subject = "Password reset code - Credit Risk"
+            html_body = EmailService._build_email_html(
+                title="Password reset request",
+                greeting=f"Hello {EmailService._display_name(full_name)},",
+                intro="Use the verification code below to reset your password.",
+                code=verification_code,
+                note="This code expires in 10 minutes. If you did not request a password reset, ignore this email.",
+            )
+            text_body = EmailService._build_email_text(
+                title="Password reset",
+                greeting=f"Hello {EmailService._display_name(full_name)},",
+                intro="Use the code below to reset your password.",
+                code=verification_code,
+                note="This code expires in 10 minutes.",
+            )
 
             return EmailService._send_email(
                 recipient_email=recipient_email,
@@ -211,48 +237,20 @@ This code will expire in 10 minutes. If you did not request a password reset, pl
     ) -> bool:
         """Send email notifying user registration was approved"""
         try:
-            subject = "Registration Approved - Credit Risk Management System"
-            
-            html_body = f"""
-            <html>
-                <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                    <div style="max-width: 600px; margin: 0 auto; border: 1px solid #ddd; padding: 20px; border-radius: 5px;">
-                        <h2 style="color: #27ae60;">✓ Registration Approved</h2>
-                        
-                        <p>Hello {full_name or 'User'},</p>
-                        
-                        <p>Your registration has been approved! You can now log in and start using the system.</p>
-                        
-                        <p style="text-align: center; margin: 30px 0;">
-                            <a href="{login_url}" 
-                               style="background-color: #27ae60; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">
-                                Log In Now
-                            </a>
-                        </p>
-                        
-                        <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
-                        
-                        <p style="color: #999; font-size: 12px; text-align: center;">
-                            Credit Risk Management System<br>
-                            © 2026. All rights reserved.
-                        </p>
-                    </div>
-                </body>
-            </html>
-            """
-            
-            text_body = f"""
-Registration Approved
-
-Hello {full_name or 'User'},
-
-Your registration has been approved! You can now log in and start using the system.
-
-Visit: {login_url}
-
-Best regards,
-Credit Risk Management System
-            """
+            subject = "Registration approved - Credit Risk"
+            html_body = EmailService._build_email_html(
+                title="Your registration is approved",
+                greeting=f"Hello {EmailService._display_name(full_name)},",
+                intro="Your account has been approved. You can now sign in and start using the system.",
+                action_label="Log in now",
+                action_url=login_url,
+            )
+            text_body = EmailService._build_email_text(
+                title="Registration approved",
+                greeting=f"Hello {EmailService._display_name(full_name)},",
+                intro="Your account has been approved. You can now log in.",
+                action_url=login_url,
+            )
             
             return EmailService._send_email(
                 recipient_email=recipient_email,
@@ -273,52 +271,24 @@ Credit Risk Management System
     ) -> bool:
         """Send email notifying user registration was rejected"""
         try:
-            subject = "Registration Status - Credit Risk Management System"
-            
+            subject = "Registration status update - Credit Risk"
             reason_text = rejection_reason or "Your registration did not meet the requirements."
-            
-            html_body = f"""
-            <html>
-                <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                    <div style="max-width: 600px; margin: 0 auto; border: 1px solid #ddd; padding: 20px; border-radius: 5px;">
-                        <h2 style="color: #e74c3c;">Registration Status Update</h2>
-                        
-                        <p>Hello {full_name or 'User'},</p>
-                        
-                        <p>Unfortunately, your registration has been rejected.</p>
-                        
-                        <p><strong>Reason:</strong></p>
-                        <p style="background-color: #f5f5f5; padding: 10px; border-left: 4px solid #e74c3c; border-radius: 3px;">
-                            {reason_text}
-                        </p>
-                        
-                        <p>If you believe this is a mistake or have questions, please contact our support team.</p>
-                        
-                        <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
-                        
-                        <p style="color: #999; font-size: 12px; text-align: center;">
-                            Credit Risk Management System<br>
-                            © 2026. All rights reserved.
-                        </p>
-                    </div>
-                </body>
-            </html>
-            """
-            
-            text_body = f"""
-Registration Status Update
-
-Hello {full_name or 'User'},
-
-Unfortunately, your registration has been rejected.
-
-Reason: {reason_text}
-
-If you believe this is a mistake or have questions, please contact our support team.
-
-Best regards,
-Credit Risk Management System
-            """
+            html_body = EmailService._build_email_html(
+                title="Registration update",
+                greeting=f"Hello {EmailService._display_name(full_name)},",
+                intro="Unfortunately, your registration request was not approved.",
+                extra_html=(
+                    '<p style="margin:16px 0 6px;"><strong>Reason:</strong></p>'
+                    f'<p style="margin:0; background:#fef3f2; border:1px solid #fecdca; color:#b42318; padding:12px; border-radius:8px;">{reason_text}</p>'
+                ),
+                note="If you believe this is a mistake, please contact support.",
+            )
+            text_body = EmailService._build_email_text(
+                title="Registration status update",
+                greeting=f"Hello {EmailService._display_name(full_name)},",
+                intro="Your registration request was not approved.",
+                extra_lines=[f"Reason: {reason_text}", "If you believe this is a mistake, please contact support."],
+            )
             
             return EmailService._send_email(
                 recipient_email=recipient_email,
@@ -345,12 +315,15 @@ Credit Risk Management System
         - console: Logs to console (demo mode)
         - smtp: Traditional SMTP (Gmail, Outlook, etc.)
         - mailgun: Mailgun API (easiest to setup)
+        - resend: Resend API over HTTPS (recommended on Railway; SMTP ports often blocked)
         """
         try:
             backend = getattr(settings, 'EMAIL_BACKEND', 'console')
             
             if backend == "mailgun":
                 return EmailService._send_mailgun(recipient_email, subject, html_body, text_body)
+            elif backend == "resend":
+                return EmailService._send_resend(recipient_email, subject, html_body, text_body)
             elif backend == "smtp":
                 return EmailService._send_smtp(recipient_email, subject, html_body, text_body)
             else:  # console (demo mode)
@@ -385,7 +358,7 @@ Credit Risk Management System
                 f"https://api.mailgun.net/v3/{domain}/messages",
                 auth=("api", api_key),
                 data={
-                    "from": getattr(settings, 'SMTP_FROM', 'Credit Risk <noreply@creditrisk.com>'),
+                    "from": EmailService._normalize_from_address(getattr(settings, 'SMTP_FROM', 'Credit Risk <noreply@creditrisk.com>')),
                     "to": recipient_email,
                     "subject": subject,
                     "text": text_body,
@@ -396,6 +369,49 @@ Credit Risk Management System
             
         except Exception as e:
             print(f"[EMAIL_ERROR] Mailgun error: {str(e)}")
+            return False
+
+    @staticmethod
+    def _send_resend(
+        recipient_email: str,
+        subject: str,
+        html_body: str,
+        text_body: str,
+    ) -> bool:
+        """Send via Resend REST API (port 443; avoids Railway SMTP blocks)."""
+        try:
+            api_key = (getattr(settings, "RESEND_API_KEY", None) or "").strip()
+            from_addr = EmailService._normalize_from_address(getattr(settings, "SMTP_FROM", None))
+            if not api_key:
+                print("[EMAIL_WARN] RESEND_API_KEY not set. Falling back to console mode.")
+                print(f"[CONSOLE] Email to {recipient_email}: {subject}")
+                return True
+            if not from_addr:
+                print("[EMAIL_WARN] SMTP_FROM not set for Resend. Set e.g. 'App <onboarding@resend.dev>' or your verified domain.")
+                return False
+
+            resp = requests.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": from_addr,
+                    "to": [recipient_email],
+                    "subject": subject,
+                    "html": html_body,
+                    "text": text_body,
+                },
+                timeout=EmailService.RESEND_TIMEOUT_SECONDS,
+            )
+            if resp.status_code in (200, 201):
+                print(f"[EMAIL_OK] Resend accepted email to {recipient_email}")
+                return True
+            print(f"[EMAIL_ERROR] Resend HTTP {resp.status_code}: {resp.text[:500]}")
+            return False
+        except Exception as e:
+            print(f"[EMAIL_ERROR] Resend error: {str(e)}")
             return False
     
     @staticmethod
