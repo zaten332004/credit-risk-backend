@@ -9,9 +9,9 @@ import pandas as pd
 
 class AIChatFileContextService:
     MAX_PREVIEW_ROWS = 40
-    MAX_PREVIEW_COLUMNS = 16
     MAX_CELL_CHARS = 160
-    MAX_CONTEXT_CHARS = 12000
+    # Đủ cho nhiều cột + vài chục dòng mẫu; vẫn giảm số dòng nếu vượt ngưỡng.
+    MAX_CONTEXT_CHARS = 48000
 
     @classmethod
     def extract_context(cls, *, filename: str, content: bytes) -> Dict[str, Any]:
@@ -30,31 +30,46 @@ class AIChatFileContextService:
         df = df.copy()
         df.columns = [str(col).strip() or f"column_{idx + 1}" for idx, col in enumerate(df.columns)]
 
-        context_columns = [str(col) for col in df.columns[: cls.MAX_PREVIEW_COLUMNS]]
+        all_columns = [str(col) for col in df.columns]
         preview_df = df.head(cls.MAX_PREVIEW_ROWS).fillna("")
         full_df = df.fillna("")
 
-        context_lines: List[str] = [
+        column_list = ", ".join(all_columns) if all_columns else "(không có cột)"
+        if len(column_list) > 8000:
+            column_list = column_list[:7997] + "..."
+
+        header_lines: List[str] = [
             f"Tệp: {clean_name}",
             f"Định dạng: {ext.lstrip('.').upper()}",
             f"Số dòng dữ liệu: {len(df)}",
             f"Số cột dữ liệu: {len(df.columns)}",
-            f"Danh sách cột: {', '.join(context_columns) if context_columns else '(không có cột)'}",
+            f"Danh sách cột: {column_list}",
             "Dữ liệu mẫu:",
         ]
 
-        if preview_df.empty:
-            context_lines.append("(Không có dòng dữ liệu nào trong file)")
-        else:
-            for idx, (_, row) in enumerate(preview_df.iterrows(), start=1):
+        def sample_lines_for_rows(num_rows: int) -> List[str]:
+            if num_rows <= 0 or preview_df.empty:
+                return ["(Không có dòng dữ liệu nào trong file)"]
+            sub = preview_df.head(num_rows)
+            lines: List[str] = []
+            for idx, (_, row) in enumerate(sub.iterrows(), start=1):
                 parts: List[str] = []
-                for col in context_columns:
+                for col in all_columns:
                     parts.append(f"{col}={cls._normalize_cell(row.get(col))}")
-                context_lines.append(f"{idx}. " + "; ".join(parts))
+                lines.append(f"{idx}. " + "; ".join(parts))
+            return lines
 
-        context_text = "\n".join(context_lines).strip()
-        if len(context_text) > cls.MAX_CONTEXT_CHARS:
-            context_text = context_text[: cls.MAX_CONTEXT_CHARS].rstrip() + "\n...(đã rút gọn)"
+        context_text = ""
+        for num_rows in range(cls.MAX_PREVIEW_ROWS, 0, -1):
+            body = sample_lines_for_rows(num_rows)
+            candidate = "\n".join(header_lines + body).strip()
+            if len(candidate) <= cls.MAX_CONTEXT_CHARS:
+                context_text = candidate
+                break
+        else:
+            context_text = "\n".join(header_lines + sample_lines_for_rows(1)).strip()
+            if len(context_text) > cls.MAX_CONTEXT_CHARS:
+                context_text = context_text[: cls.MAX_CONTEXT_CHARS].rstrip() + "\n...(đã rút gọn)"
 
         return {
             "file_name": clean_name,
