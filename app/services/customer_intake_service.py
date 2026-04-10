@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import unicodedata
 
 import pandas as pd
-from sqlalchemy import desc, func, or_
+from sqlalchemy import desc, or_
 from sqlalchemy.orm import selectinload
 
 from app.db.models import (
@@ -1182,14 +1182,14 @@ def _detect_duplicate_customer(
             return f"Trùng mã khách hàng tham chiếu (ID): {normalized_ref}"
 
     if normalized_email:
-        q = db.query(CustomerDB).filter(func.lower(CustomerDB.email) == normalized_email.lower())
+        q = db.query(CustomerDB).filter(CustomerDB.email.ilike(normalized_email))
         if exclude_customer_id is not None:
             q = q.filter(CustomerDB.customer_id != exclude_customer_id)
         if q.first():
             return f"Trùng email: {normalized_email}"
 
     if normalized_name:
-        q = db.query(CustomerDB).filter(func.lower(CustomerDB.full_name) == normalized_name.lower())
+        q = db.query(CustomerDB).filter(CustomerDB.full_name.ilike(normalized_name))
         if exclude_customer_id is not None:
             q = q.filter(CustomerDB.customer_id != exclude_customer_id)
         if q.first():
