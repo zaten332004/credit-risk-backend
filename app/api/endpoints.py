@@ -308,7 +308,7 @@ async def list_customers_endpoint(
     search_name: Optional[str] = None,
     risk_level: Optional[str] = None,
     min_pd: Optional[float] = None,  # demo, chưa dùng
-    current_user: User = Depends(get_current_analyst_user),  # Analyst, Manager, Admin
+    current_user: User = Depends(get_current_active_user),
 ) -> PaginatedCustomers:
     return customer_intake_service.list_customers(page=page, limit=limit, search_name=search_name, risk_level=risk_level)
 
@@ -316,7 +316,7 @@ async def list_customers_endpoint(
 @router.get("/customers/{customer_id}", response_model=CustomerRead, tags=["customers"])
 async def get_customer_endpoint(
     customer_id: int,
-    current_user: User = Depends(get_current_analyst_user),  # Analyst, Manager, Admin
+    current_user: User = Depends(get_current_active_user),
 ) -> CustomerRead:
     customer = customer_intake_service.get_customer(customer_id)
     if not customer:
@@ -370,7 +370,7 @@ async def delete_customer_endpoint(
 @router.get("/customers/{customer_id}/history", response_model=List[CustomerHistoryItem], tags=["customers"])
 async def customer_history_endpoint(
     customer_id: int,
-    current_user: User = Depends(get_current_analyst_user),  # Analyst, Manager, Admin
+    current_user: User = Depends(get_current_active_user),
 ) -> List[CustomerHistoryItem]:
     return customer_intake_service.get_customer_history(customer_id)
 
@@ -378,7 +378,7 @@ async def customer_history_endpoint(
 @router.post("/customers/search", response_model=PaginatedCustomers, tags=["customers"])
 async def customer_search_endpoint(
     body: CustomerSearchBody,
-    current_user: User = Depends(get_current_analyst_user),  # Analyst, Manager, Admin
+    current_user: User = Depends(get_current_active_user),
 ) -> PaginatedCustomers:
     return customer_intake_service.advanced_customer_search(body)
 
