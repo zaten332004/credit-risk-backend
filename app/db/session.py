@@ -6,7 +6,17 @@ from app.core.config import settings
 # Connection string should be provided via .env (DATABASE_URL).
 # Example:
 # mysql+pymysql://root:your_password@localhost:3306/CreditRiskDB?charset=utf8mb4
-SQLALCHEMY_DATABASE_URL = (settings.DATABASE_URL or "").strip()
+#
+# Railway / many hosts expose mysql:// without a driver; SQLAlchemy maps that to MySQLdb,
+# which we do not install. Force PyMySQL (see requirements.txt).
+def _normalize_mysql_url(url: str) -> str:
+    u = url.strip()
+    if u.startswith("mysql://"):
+        return "mysql+pymysql://" + u[len("mysql://") :]
+    return u
+
+
+SQLALCHEMY_DATABASE_URL = _normalize_mysql_url(settings.DATABASE_URL or "")
 if not SQLALCHEMY_DATABASE_URL:
     raise RuntimeError("DATABASE_URL is not configured. Please set DATABASE_URL in .env")
 
