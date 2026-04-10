@@ -55,6 +55,24 @@ class GeminiResourceExhaustedError(RuntimeError):
         self.retry_after_seconds = retry_after_seconds
 
 
+class GeminiServiceUnavailableError(RuntimeError):
+    """Google Gemini returned 503 UNAVAILABLE (overload / high demand)."""
+
+    pass
+
+
+def _looks_like_upstream_unavailable(exc: BaseException, msg: str) -> bool:
+    m = (msg or "").lower()
+    if "503" in (msg or "") and ("unavailable" in m or "high demand" in m or "try again later" in m):
+        return True
+    try:
+        from google.genai.errors import ServerError
+
+        return isinstance(exc, ServerError) and getattr(exc, "status_code", None) == 503
+    except ImportError:
+        return False
+
+
 def _parse_retry_after_seconds(msg: str) -> Optional[int]:
     s = msg or ""
 
@@ -608,6 +626,11 @@ class GeminiAIChatService:
                         ),
                         retry_after_seconds=retry_after,
                     ) from exc
+                if _looks_like_upstream_unavailable(exc, msg):
+                    logger.warning("Gemini generate_content unavailable (503): %s", msg[:500])
+                    raise GeminiServiceUnavailableError(
+                        "Gemini model temporarily unavailable (503 UNAVAILABLE). Please retry later."
+                    ) from exc
                 raise
 
             ai_text = _dedupe_response_text(_extract_text(resp))
@@ -650,6 +673,9 @@ class GeminiAIChatService:
             session.rollback()
             raise
         except GeminiResourceExhaustedError:
+            session.rollback()
+            raise
+        except GeminiServiceUnavailableError:
             session.rollback()
             raise
         except Exception as exc:
