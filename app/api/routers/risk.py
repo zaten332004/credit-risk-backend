@@ -88,15 +88,49 @@ async def risk_batch_endpoint(
     return RiskBatchResult(results=results, summary=summary)
 
 
+def _risk_request_from_merged(merged: dict) -> RiskRequest:
+    return RiskRequest(
+        income=float(merged.get("income", 0.0)),
+        debt=float(merged.get("debt", 0.0)),
+        age=int(merged.get("age", 30)),
+        credit_history_months=int(merged.get("credit_history_months", 12)),
+        credit_score=int(merged["credit_score"]) if merged.get("credit_score") is not None else None,
+        loan_type=merged.get("loan_type"),
+        interest_rate=float(merged["interest_rate"]) if merged.get("interest_rate") is not None else None,
+        loan_term_months=int(merged["loan_term_months"]) if merged.get("loan_term_months") is not None else None,
+        collateral_value=float(merged["collateral_value"]) if merged.get("collateral_value") is not None else None,
+        employment_status=merged.get("employment_status"),
+    )
+
+
 @router.post("/risk/simulation", response_model=RiskSimulationResult, tags=["risk"])
 async def risk_simulation_endpoint(
     body: RiskSimulationBody,
     current_user: User = Depends(get_current_active_user),
 ) -> RiskSimulationResult:
-    # Demo: trả về base_data + từng scenario
+    base_data = body.base_data if isinstance(body.base_data, dict) else {}
+    base_req = _risk_request_from_merged(base_data)
+    base_score_data = risk_service.simple_credit_risk_score(base_req)
+    base_score = float(base_score_data.get("risk_score", 0.0))
+
     scenario_results = []
-    for s in body.scenarios:
-        scenario_results.append({"scenario": s, "delta_el": 10_000})
+    for scenario in body.scenarios:
+        if not isinstance(scenario, dict):
+            continue
+        merged = dict(base_data)
+        merged.update(scenario)
+        req = _risk_request_from_merged(merged)
+        sim = risk_service.simple_credit_risk_score(req)
+        sim_score = float(sim.get("risk_score", 0.0))
+        scenario_results.append(
+            {
+                "scenario": scenario,
+                "risk_score": sim_score,
+                "risk_label": sim.get("risk_label"),
+                "cic_score": sim.get("cic_score"),
+                "delta_risk_score": sim_score - base_score,
+            }
+        )
     return RiskSimulationResult(scenario_results=scenario_results)
 
 

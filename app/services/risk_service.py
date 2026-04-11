@@ -7,6 +7,9 @@ from typing import Any, Dict, List, Tuple
 from app.schemas.schemas import RiskExplainResponse, RiskRequest, RiskScoreDetail
 from app.services import customer_service
 
+# Chuẩn hóa DTI: f_DTI = min(DTI, cap) / cap. Cap > 2 để DTI > 2 vẫn phản ánh trong mô phỏng / chỉ số.
+DTI_NORMALIZATION_CAP: float = 4.0
+
 
 def _build_explanation_detail(
     *,
@@ -172,7 +175,7 @@ def _detailed_explanations(
 
     explanation_vi = f"""Mô hình heuristic (demo) gộp nhiều tín hiệu thành một chỉ số rủi ro R ∈ [0, 1]: R càng lớn thì rủi ro tín dụng càng cao.
 
-1) Định nghĩa DTI (gánh nợ so với thu nhập): DTI = dư nợ / thu nhập tháng = {payload.debt:.2f} / {payload.income:.2f} = {dti:.4f}. Hệ số chuẩn hóa f_DTI = min(DTI, 2) / 2 ∈ [0, 1] = {dti_factor:.4f}. DTI cao → f_DTI lớn → kênh này đẩy R lên.
+1) Định nghĩa DTI (gánh nợ so với thu nhập): DTI = dư nợ / thu nhập tháng = {payload.debt:.2f} / {payload.income:.2f} = {dti:.4f}. Hệ số chuẩn hóa f_DTI = min(DTI, {DTI_NORMALIZATION_CAP:g}) / {DTI_NORMALIZATION_CAP:g} ∈ [0, 1] = {dti_factor:.4f}. DTI cao → f_DTI lớn → kênh này đẩy R lên.
 
 2) Tuổi: f_tuổi = 1 − giới hạn((tuổi−18)/(70−18)) vào [0,1] = {age_factor:.4f}. Tuổi càng nhỏ (trong khoảng 18–70) thì f_tuổi càng lớn → rủi ro tăng (theo giả định mô hình).
 
@@ -203,7 +206,7 @@ Tham chiếu CIC (quy đổi minh họa): điểm {cic_score}, nhóm {cic_group}
 
     explanation_en = f"""This demo heuristic combines several signals into a single credit risk score R ∈ [0, 1]. Higher R means higher risk.
 
-1) Debt-to-income (DTI) = debt / monthly income = {payload.debt:.2f} / {payload.income:.2f} = {dti:.4f}. Normalized factor f_DTI = min(DTI, 2) / 2 ∈ [0, 1] = {dti_factor:.4f}. Higher DTI increases R.
+1) Debt-to-income (DTI) = debt / monthly income = {payload.debt:.2f} / {payload.income:.2f} = {dti:.4f}. Normalized factor f_DTI = min(DTI, {DTI_NORMALIZATION_CAP:g}) / {DTI_NORMALIZATION_CAP:g} ∈ [0, 1] = {dti_factor:.4f}. Higher DTI increases R.
 
 2) Age: f_age = 1 − clip((age−18)/(70−18)) to [0,1] = {age_factor:.4f}. Younger ages (within 18–70) yield a larger f_age → higher modeled risk.
 
@@ -264,7 +267,8 @@ def compute_heuristic_state(payload: RiskRequest) -> HeuristicState:
     `contributions` maps engine keys to (weight × factor).
     """
     dti = (payload.debt / payload.income) if payload.income > 0 else 1.0
-    dti_factor = min(max(dti, 0.0), 2.0) / 2.0
+    cap = DTI_NORMALIZATION_CAP
+    dti_factor = min(max(dti, 0.0), cap) / cap
     age_factor = 1.0 - min(max((payload.age - 18) / (70 - 18), 0.0), 1.0)
     history_factor = 1.0 - min(max(payload.credit_history_months / 120.0, 0.0), 1.0)
 
