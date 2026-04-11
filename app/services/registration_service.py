@@ -303,6 +303,7 @@ class RegistrationService:
                     "approved_at": user.approved_at.isoformat() if user.approved_at else None,
                 }
                 user.status = "approved"
+                user.rejection_reason = None
                 user.approved_by = approved_by
                 user.approved_at = datetime.utcnow()
                 
@@ -349,7 +350,8 @@ class RegistrationService:
                 return True, f"Registration approved for {user.username}. Approval email sent."
 
             elif action.lower() == "reject":
-                if not rejection_reason:
+                reason_stripped = (rejection_reason or "").strip()
+                if not reason_stripped:
                     return False, "Rejection reason required"
 
                 old_state = {
@@ -359,7 +361,7 @@ class RegistrationService:
                     "approved_at": user.approved_at.isoformat() if user.approved_at else None,
                 }
                 user.status = "rejected"
-                user.rejection_reason = rejection_reason
+                user.rejection_reason = reason_stripped
                 user.approved_by = approved_by
                 user.approved_at = datetime.utcnow()
 
@@ -384,7 +386,7 @@ class RegistrationService:
                 EmailService.send_registration_rejected_email(
                     recipient_email=user.email,
                     full_name=user.full_name,
-                    rejection_reason=rejection_reason
+                    rejection_reason=reason_stripped,
                 )
 
                 return True, f"Registration rejected for {user.username}. Rejection email sent."

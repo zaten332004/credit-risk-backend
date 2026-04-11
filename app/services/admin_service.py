@@ -47,6 +47,7 @@ def list_users_with_filters(
                 email=user.email,
                 role_id=user.role_id,
                 created_at=user.created_at,
+                rejection_reason=(user.rejection_reason or "").strip() or None,
             )
             for user in users
         ]

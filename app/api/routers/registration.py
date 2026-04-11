@@ -5,9 +5,9 @@ User registration, email verification, and manager approval
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.security import create_access_token
+from app.core.security import create_access_token, get_current_active_user, get_current_admin_user
+from app.db.models import UserDB
 from app.db.session import SessionLocal
-from app.core.security import get_current_admin_user
 from app.schemas.schemas import (
     UserRegistrationRequest,
     UserRegistrationResponse,
@@ -79,6 +79,26 @@ async def verify_email(token: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
 
     return {"message": message, "status": "verified"}
+
+
+@router.get("/me/status")
+async def get_my_registration_status(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Current user's registration row (status + rejection_reason). For pending/rejected users on the verify flow;
+    does not require admin (unlike GET /registration/{user_id}).
+    """
+    row = db.query(UserDB).filter(UserDB.user_id == current_user.id).first()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    reason = (row.rejection_reason or "").strip()
+    return {
+        "user_id": int(row.user_id),
+        "status": str(row.status or "pending").strip().lower() or "pending",
+        "rejection_reason": reason or None,
+    }
 
 
 @router.post("/resend-verification")

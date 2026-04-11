@@ -370,6 +370,7 @@ def _to_user_read(user: UserDB, role_name: Optional[str] = None) -> UserRead:
         status=user.status,
         is_active=_is_user_active(user.status),
         created_at=user.created_at,
+        rejection_reason=(user.rejection_reason or "").strip() or None,
     )
 
 

@@ -3,7 +3,7 @@ import re
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator, validator
 
 
 EMAIL_REGEX = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
@@ -207,6 +207,7 @@ class UserRead(BaseModel):
     status: str | None = None
     is_active: bool = True
     created_at: datetime
+    rejection_reason: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -327,9 +328,32 @@ class UserRegistrationResponse(BaseModel):
 
 
 class UserRegistrationApprovalRequest(BaseModel):
-    registration_id: int
+    """Admin approve/reject body. Accepts snake_case or camelCase JSON keys."""
+
+    model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
+
+    registration_id: int = Field(
+        ...,
+        validation_alias=AliasChoices("registration_id", "registrationId"),
+    )
     action: str = Field(..., description="'approve' or 'reject'")
-    rejection_reason: str | None = Field(None, description="Required if action is 'reject'")
+    rejection_reason: str | None = Field(
+        default=None,
+        description="Required if action is 'reject'",
+        validation_alias=AliasChoices("rejection_reason", "rejectionReason"),
+    )
+
+    @model_validator(mode="after")
+    def reject_requires_reason_and_trim(self) -> "UserRegistrationApprovalRequest":
+        act = (self.action or "").strip().lower()
+        if act == "reject":
+            reason = (self.rejection_reason or "").strip()
+            if not reason:
+                raise ValueError("rejection_reason is required when action is reject")
+            self.rejection_reason = reason
+        else:
+            self.rejection_reason = (self.rejection_reason or "").strip() or None
+        return self
 
 
 class UserRegistrationResendRequest(BaseModel):
