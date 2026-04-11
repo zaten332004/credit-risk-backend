@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from io import BytesIO
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import unicodedata
 
 import pandas as pd
@@ -241,10 +241,15 @@ def _create_risk_prediction(
     *,
     customer: CustomerDB,
     application: Optional[LoanApplicationDB],
-) -> Optional[str]:
-    score, level = _compute_model_risk(customer, application)
+    risk_score_override: Optional[float] = None,
+    risk_level_override: Optional[str] = None,
+) -> Tuple[Optional[float], Optional[str]]:
+    score = risk_score_override
+    level = (risk_level_override or "").strip().lower() if risk_level_override else None
+    if score is None or level not in {"low", "medium", "high"}:
+        score, level = _compute_model_risk(customer, application)
     if score is None or level is None:
-        return None
+        return None, None
     db.add(
         RiskPredictionDB(
             customer_id=customer.customer_id,
@@ -255,10 +260,10 @@ def _create_risk_prediction(
         )
     )
     db.flush()
-    return level
+    return score, level
 
 
-def _latest_prediction_level_map(db: Any, customer_ids: List[int]) -> Dict[int, str]:
+def _latest_prediction_snapshot_map(db: Any, customer_ids: List[int]) -> Dict[int, Dict[str, Optional[float] | Optional[str]]]:
     if not customer_ids:
         return {}
     rows = (
@@ -267,7 +272,7 @@ def _latest_prediction_level_map(db: Any, customer_ids: List[int]) -> Dict[int, 
         .order_by(desc(RiskPredictionDB.predicted_at), desc(RiskPredictionDB.prediction_id))
         .all()
     )
-    mapping: Dict[int, str] = {}
+    mapping: Dict[int, Dict[str, Optional[float] | Optional[str]]] = {}
     for row in rows:
         if row.customer_id is None:
             continue
@@ -275,14 +280,20 @@ def _latest_prediction_level_map(db: Any, customer_ids: List[int]) -> Dict[int, 
         if cid in mapping:
             continue
         level = str(row.risk_level or "").strip().lower()
+        score_value: Optional[float] = None
+        try:
+            score_value = float(row.risk_score)
+        except (TypeError, ValueError):
+            score_value = None
         if level in {"low", "medium", "high"}:
-            mapping[cid] = level
+            mapping[cid] = {"risk_level": level, "risk_score": score_value}
         else:
-            try:
-                score = float(row.risk_score)
-            except (TypeError, ValueError):
+            if score_value is None:
                 continue
-            mapping[cid] = "low" if score < 0.33 else "medium" if score < 0.66 else "high"
+            mapping[cid] = {
+                "risk_level": "low" if score_value < 0.33 else "medium" if score_value < 0.66 else "high",
+                "risk_score": score_value,
+            }
     return mapping
 
 
@@ -421,6 +432,7 @@ def _to_customer_read(
     customer: CustomerDB,
     application: Optional[LoanApplicationDB] = None,
     risk_level_override: Optional[str] = None,
+    risk_score_override: Optional[float] = None,
 ) -> CustomerRead:
     application = application or _latest_application(customer)
     interest_rate = None
@@ -463,6 +475,7 @@ def _to_customer_read(
         requested_loan_amount=float(application.loan_amount) if application and application.loan_amount is not None else None,
         requested_term_months=application.loan_term if application else None,
         annual_interest_rate=interest_rate,
+        risk_score=risk_score_override,
         risk_level=risk_level_override or _infer_risk_level(customer.credit_score),
         application_status=application.loan_status if application else "pending",
         application_ref_no=application.application_ref_no if application else None,
@@ -659,11 +672,20 @@ def list_customers(
             )
 
         customers = query.order_by(desc(CustomerDB.created_at), desc(CustomerDB.customer_id)).all()
-        prediction_level_map = _latest_prediction_level_map(db, [int(c.customer_id) for c in customers if c.customer_id is not None])
+        prediction_snapshot_map = _latest_prediction_snapshot_map(db, [int(c.customer_id) for c in customers if c.customer_id is not None])
         items = [
             _to_customer_read(
                 customer,
-                risk_level_override=prediction_level_map.get(int(customer.customer_id)) if customer.customer_id is not None else None,
+                risk_level_override=(
+                    prediction_snapshot_map.get(int(customer.customer_id), {}).get("risk_level")
+                    if customer.customer_id is not None
+                    else None
+                ),
+                risk_score_override=(
+                    prediction_snapshot_map.get(int(customer.customer_id), {}).get("risk_score")
+                    if customer.customer_id is not None
+                    else None
+                ),
             )
             for customer in customers
         ]
@@ -695,10 +717,14 @@ def get_customer(customer_id: int) -> Optional[CustomerRead]:
         )
         if not customer:
             return None
-        prediction_level_map = _latest_prediction_level_map(db, [int(customer.customer_id)])
+        prediction_snapshot_map = _latest_prediction_snapshot_map(db, [int(customer.customer_id)])
         return _enrich_customer_read(
             db,
-            _to_customer_read(customer, risk_level_override=prediction_level_map.get(int(customer.customer_id))),
+            _to_customer_read(
+                customer,
+                risk_level_override=prediction_snapshot_map.get(int(customer.customer_id), {}).get("risk_level"),
+                risk_score_override=prediction_snapshot_map.get(int(customer.customer_id), {}).get("risk_score"),
+            ),
         )
     finally:
         db.close()
@@ -737,8 +763,13 @@ def create_customer(payload: CustomerCreate, created_by: str, created_by_user_id
             db.add(application)
             db.flush()
 
-        risk_level = _create_risk_prediction(db, customer=customer, application=application)
-        customer_read = _to_customer_read(customer, application, risk_level_override=risk_level)
+        risk_score, risk_level = _create_risk_prediction(db, customer=customer, application=application)
+        customer_read = _to_customer_read(
+            customer,
+            application,
+            risk_level_override=risk_level,
+            risk_score_override=risk_score,
+        )
         log_action(
             db,
             user_id=created_by_user_id,
@@ -774,8 +805,12 @@ def update_customer(
         if not customer:
             return None
 
-        before_prediction_level = _latest_prediction_level_map(db, [int(customer.customer_id)]).get(int(customer.customer_id))
-        before_customer = _to_customer_read(customer, risk_level_override=before_prediction_level)
+        before_prediction = _latest_prediction_snapshot_map(db, [int(customer.customer_id)]).get(int(customer.customer_id), {})
+        before_customer = _to_customer_read(
+            customer,
+            risk_level_override=before_prediction.get("risk_level"),
+            risk_score_override=before_prediction.get("risk_score"),
+        )
         before = before_customer.model_dump(mode="json")
         previous_status = _normalize_application_status(before_customer.application_status)
         _apply_customer_payload(customer, payload)
@@ -820,8 +855,19 @@ def update_customer(
                 )
                 db.flush()
 
-        risk_level = _create_risk_prediction(db, customer=customer, application=application)
-        updated = _to_customer_read(customer, application, risk_level_override=risk_level)
+        risk_score, risk_level = _create_risk_prediction(
+            db,
+            customer=customer,
+            application=application,
+            risk_score_override=payload.risk_score,
+            risk_level_override=payload.risk_level,
+        )
+        updated = _to_customer_read(
+            customer,
+            application,
+            risk_level_override=risk_level,
+            risk_score_override=risk_score,
+        )
         next_status = _normalize_application_status(updated.application_status)
         action = "UPDATE"
         if next_status != previous_status:
@@ -1270,14 +1316,19 @@ def import_customer_file(
                 )
                 db.flush()
 
-                risk_level = _create_risk_prediction(db, customer=customer, application=application)
+                risk_score, risk_level = _create_risk_prediction(db, customer=customer, application=application)
                 log_action(
                     db,
                     user_id=created_by_user_id,
                     action="INSERT" if created_customer else "UPDATE",
                     entity_type="Customer",
                     entity_id=customer.customer_id,
-                    new_value=_to_customer_read(customer, application, risk_level_override=risk_level).model_dump(mode="json"),
+                    new_value=_to_customer_read(
+                        customer,
+                        application,
+                        risk_level_override=risk_level,
+                        risk_score_override=risk_score,
+                    ).model_dump(mode="json"),
                 )
                 db.commit()
 

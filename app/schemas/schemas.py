@@ -435,6 +435,7 @@ class CustomerCreate(BaseModel):
     requested_loan_amount: Optional[float] = None
     requested_term_months: Optional[int] = None
     annual_interest_rate: Optional[float] = None
+    risk_score: Optional[float] = None
     risk_level: Optional[str] = None
     application_status: Optional[str] = None
     application_ref_no: Optional[str] = None
@@ -506,6 +507,7 @@ class CustomerUpdate(BaseModel):
     requested_loan_amount: Optional[float] = None
     requested_term_months: Optional[int] = None
     annual_interest_rate: Optional[float] = None
+    risk_score: Optional[float] = None
     risk_level: Optional[str] = None
     application_status: Optional[str] = None
     application_ref_no: Optional[str] = None
@@ -572,6 +574,7 @@ class CustomerRead(BaseModel):
     requested_loan_amount: Optional[float] = None
     requested_term_months: Optional[int] = None
     annual_interest_rate: Optional[float] = None
+    risk_score: Optional[float] = None
     risk_level: Optional[str] = None
     application_status: Optional[str] = None
     application_ref_no: Optional[str] = None
