@@ -51,6 +51,46 @@ def get_pending_account_status(db: Session, user_id: int) -> dict:
     }
 
 
+def admin_set_user_pin(
+    db: Session,
+    *,
+    target_user_id: int,
+    pin: str,
+    actor_admin_id: int,
+) -> tuple[bool, str]:
+    """Admin sets or replaces the target user's 6-digit account PIN (audited)."""
+    target = db.query(UserDB).filter(UserDB.user_id == target_user_id).first()
+    if not target:
+        return False, "User not found"
+    if int(target_user_id) == int(actor_admin_id):
+        return False, "Use profile PIN endpoints to set your own PIN"
+
+    try:
+        normalized = _normalize_pin(pin)
+    except ValueError as exc:
+        return False, str(exc)
+
+    had_pin = bool((target.pin_hash or "").strip())
+    target.pin_hash = pwd_context.hash(normalized)
+    target.pin_updated_at = datetime.utcnow()
+    target.updated_at = datetime.utcnow()
+
+    log_action(
+        db,
+        user_id=actor_admin_id,
+        action="ADMIN_SET_USER_PIN",
+        entity_type="UserProfile",
+        entity_id=target_user_id,
+        old_value={"had_pin": had_pin},
+        new_value={
+            "target_user_id": target_user_id,
+            "pin_updated_at": target.pin_updated_at.isoformat(),
+        },
+    )
+    db.commit()
+    return True, "PIN set successfully"
+
+
 def set_account_pin(db: Session, user_id: int, pin: str) -> tuple[bool, str]:
     user = db.query(UserDB).filter(UserDB.user_id == user_id).first()
     if not user:

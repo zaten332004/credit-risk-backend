@@ -18,7 +18,10 @@ def request_password_reset(db: Session, email: str) -> tuple[bool, str]:
         return True, "If the email exists, use your account PIN to reset password."
 
     if not (user.pin_hash or "").strip():
-        return False, "Account PIN is not set. Contact admin to set PIN first."
+        return False, (
+            "Account PIN is not set. An administrator must set your 6-digit account PIN "
+            "from the admin users screen before you can use forgot-password with PIN."
+        )
 
     log_action(
         db,

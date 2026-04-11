@@ -868,6 +868,24 @@ async def admin_delete_user_endpoint(
     return MessageResponse(message=message)
 
 
+@router.post("/admin/users/{user_id}/pin", response_model=UserRead, tags=["admin"])
+async def admin_set_user_pin_endpoint(
+    user_id: int,
+    body: AccountPinSetBody,
+    current_user: User = Depends(get_current_admin_user),
+) -> UserRead:
+    updated, message = services.admin_set_user_pin(
+        user_id=user_id,
+        pin=body.pin,
+        actor_user_id=current_user.id,
+    )
+    if not updated:
+        if message == "User not found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=message)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
+    return updated
+
+
 @router.get("/admin/audit-logs", response_model=List[AuditLogRead], tags=["admin"])
 async def admin_audit_logs_endpoint(
     from_date: Optional[str] = None,

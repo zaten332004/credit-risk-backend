@@ -68,7 +68,7 @@ from app.schemas.schemas import (
     UserRead,
 )
 from app.services.audit_service import log_action, to_audit_log_read
-from app.services import customer_intake_service
+from app.services import account_pin_service, customer_intake_service
 from app.services.risk_service import compute_heuristic_state
 
 logger = logging.getLogger(__name__)
@@ -369,6 +369,7 @@ def _to_user_read(user: UserDB, role_name: Optional[str] = None) -> UserRead:
         role=resolved_role,
         status=user.status,
         is_active=_is_user_active(user.status),
+        has_pin=bool((user.pin_hash or "").strip()),
         created_at=user.created_at,
         rejection_reason=(user.rejection_reason or "").strip() or None,
     )
@@ -1275,6 +1276,26 @@ def set_user_active(user_id: int, is_active: bool, actor_user_id: Optional[int] 
 
         role = db.query(RoleDB).filter(RoleDB.role_id == row.role_id).first()
         return _to_user_read(row, role.role_name if role else None)
+    finally:
+        db.close()
+
+
+def admin_set_user_pin(user_id: int, pin: str, actor_user_id: int) -> tuple[Optional[UserRead], str]:
+    db = SessionLocal()
+    try:
+        ok, msg = account_pin_service.admin_set_user_pin(
+            db,
+            target_user_id=user_id,
+            pin=pin,
+            actor_admin_id=actor_user_id,
+        )
+        if not ok:
+            return None, msg
+        row = db.query(UserDB).filter(UserDB.user_id == user_id).first()
+        if not row:
+            return None, "User not found"
+        role = db.query(RoleDB).filter(RoleDB.role_id == row.role_id).first()
+        return _to_user_read(row, role.role_name if role else None), msg
     finally:
         db.close()
 

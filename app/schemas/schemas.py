@@ -206,6 +206,7 @@ class UserRead(BaseModel):
     role: str = "viewer"
     status: str | None = None
     is_active: bool = True
+    has_pin: bool = False
     created_at: datetime
     rejection_reason: Optional[str] = None
 
