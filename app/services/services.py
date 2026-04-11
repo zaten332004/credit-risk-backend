@@ -28,6 +28,8 @@ from app.db.models import (
     RoleDB,
     UserDB,
 )
+from app.db.loan_product_models import LoanApprovalDB
+from app.db.risk_models import LoanClassificationDB, ProvisionAllocationDB
 from app.db.session import SessionLocal
 from app.models.models import Alert, ChatSession, Customer, RiskModelInfo, UploadJob
 from app.schemas.schemas import (
@@ -1225,6 +1227,18 @@ def delete_user(user_id: int, actor_user_id: Optional[int] = None) -> tuple[bool
             synchronize_session=False,
         )
         db.query(ManagerUpgradeRequestDB).filter(ManagerUpgradeRequestDB.approved_by == user_id).update(
+            {"approved_by": None},
+            synchronize_session=False,
+        )
+        db.query(LoanClassificationDB).filter(LoanClassificationDB.classified_by == user_id).update(
+            {"classified_by": None},
+            synchronize_session=False,
+        )
+        db.query(ProvisionAllocationDB).filter(ProvisionAllocationDB.allocated_by == user_id).update(
+            {"allocated_by": None},
+            synchronize_session=False,
+        )
+        db.query(LoanApprovalDB).filter(LoanApprovalDB.approved_by == user_id).update(
             {"approved_by": None},
             synchronize_session=False,
         )
