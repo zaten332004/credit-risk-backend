@@ -83,6 +83,7 @@ async def update_customer_status_endpoint(
     updated = customer_service.update_customer_status(
         customer_id,
         application_status=body.application_status,
+        rejection_reason=body.rejection_reason,
         updated_by=current_user.email,
         updated_by_user_id=current_user.id,
     )

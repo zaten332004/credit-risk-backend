@@ -829,6 +829,10 @@ def update_customer(
                 action = "APPROVE_CUSTOMER"
             elif next_status == "rejected":
                 action = "REJECT_CUSTOMER"
+        audit_new_value = updated.model_dump(mode="json")
+        rejection_reason = (getattr(payload, "notes", None) or "").strip()
+        if next_status == "rejected" and rejection_reason:
+            audit_new_value["rejection_reason"] = rejection_reason
         log_action(
             db,
             user_id=updated_by_user_id,
@@ -836,7 +840,7 @@ def update_customer(
             entity_type="Customer",
             entity_id=customer.customer_id,
             old_value=before,
-            new_value=updated.model_dump(mode="json"),
+            new_value=audit_new_value,
         )
         updated = _enrich_customer_read(db, updated)
         db.commit()

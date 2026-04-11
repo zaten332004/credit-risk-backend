@@ -522,6 +522,7 @@ class CustomerUpdate(BaseModel):
 
 class CustomerStatusUpdateBody(BaseModel):
     application_status: str
+    rejection_reason: Optional[str] = None
 
     @validator("application_status")
     def application_status_valid(cls, v):
@@ -529,6 +530,20 @@ class CustomerStatusUpdateBody(BaseModel):
         if normalized not in {"pending", "approved", "rejected", "disbursed"}:
             raise ValueError("application_status must be one of: pending, approved, rejected, disbursed")
         return normalized
+
+    @validator("rejection_reason", pre=True)
+    def rejection_reason_trim(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        text = str(v).strip()
+        return text or None
+
+    @validator("rejection_reason", always=True)
+    def rejection_reason_required_for_rejected(cls, v: Optional[str], values: Dict[str, Any]) -> Optional[str]:
+        status_value = str(values.get("application_status") or "").strip().lower()
+        if status_value == "rejected" and not v:
+            raise ValueError("rejection_reason is required when application_status is rejected")
+        return v
 
 
 class CustomerRead(BaseModel):
