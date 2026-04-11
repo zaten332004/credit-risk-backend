@@ -26,12 +26,14 @@ from app.core.security import get_current_active_user
 from app.db.session import SessionLocal
 from app.db.models import ChatHistoryDB, ChatSessionDB
 from app.schemas.schemas import User
-from app.services.gemini_ai_chat_service import GeminiResourceExhaustedError
+from app.services.gemini_ai_chat_service import GeminiResourceExhaustedError, GeminiServiceUnavailableError
 from app.services.mock_ai_chat_service import MockAIChatService
 from app.services.analytics_data_service import get_analysis_context, get_analysis_context_powerbi
+from app.services import customer_intake_service
 from app.services.ai_chat_file_context_service import AIChatFileContextService
+from app.services.audit_service import log_action
 from app.services.chat_session_metadata import set_chat_session_pinned, update_chat_session_initial_context, update_chat_session_name
-from app.services.services import get_upload_job_content, persist_upload_job_file
+from app.services.services import get_upload_job_content, persist_upload_job_file, set_upload_job_content
 from app.services.powerbi_service import powerbi_service
 
 logger = logging.getLogger(__name__)
@@ -552,6 +554,21 @@ async def send_message(
                 headers=headers,
             )
 
+        if isinstance(e, GeminiServiceUnavailableError):
+            logger.warning(
+                "ai-chat send_message upstream unavailable (user_id=%s session_id=%s)",
+                getattr(current_user, "id", None),
+                session_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Dịch vụ AI (Gemini) đang quá tải tạm thời. "
+                    "Vui lòng thử lại sau vài phút."
+                ),
+                headers={"Retry-After": "60"},
+            )
+
         fallback = _fallback_to_mock_enabled() and (not _looks_like_auth_or_config_error(e))
         if fallback and not isinstance(chat_service, MockAIChatService):
             mock = MockAIChatService()
@@ -607,9 +624,14 @@ async def send_message(
 @router.post("/upload-file")
 async def ai_chat_upload_context_file(
     file: UploadFile = File(...),
-    _: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
 ):
-    """Parse CSV/Excel for in-chat context (passed as customer_context.uploaded_files on /send)."""
+    """Parse CSV/Excel for in-chat context (passed as customer_context.uploaded_files on /send).
+
+    If the file matches the customer import template (same rules as /upload/data), rows are
+    imported into the customer list and a CustomerImport audit entry is written for upload history.
+    """
     contents = await file.read()
     if not contents:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
@@ -625,23 +647,90 @@ async def ai_chat_upload_context_file(
     except Exception:
         logger.exception("Failed to persist AI chat upload file id=%s", fid)
         raise HTTPException(status_code=500, detail="Could not store uploaded file")
-    return {
-        "uploaded_files": [
+
+    import_summary = None
+    try:
+        import_summary = customer_intake_service.import_customer_file(
+            filename=raw_name,
+            content=contents,
+            created_by=current_user.email,
+            created_by_user_id=current_user.id,
+            upload_batch_id=fid,
+        )
+    except ValueError:
+        pass
+    except Exception as exc:
+        logger.exception("AI chat customer import failed file_id=%s", fid)
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="IMPORT_CUSTOMERS_FAILED",
+                entity_type="CustomerImport",
+                entity_id=None,
+                new_value={
+                    "job_id": fid,
+                    "file_name": raw_name,
+                    "error": str(exc),
+                },
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    if import_summary is not None:
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="IMPORT_CUSTOMERS",
+                entity_type="CustomerImport",
+                entity_id=None,
+                new_value={
+                    "job_id": fid,
+                    "file_name": extracted["file_name"],
+                    "processed_count": import_summary.get("processed_count"),
+                    "success_count": import_summary.get("success_count"),
+                    "error_count": import_summary.get("error_count"),
+                },
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+        set_upload_job_content(
+            fid,
             {
-                "id": fid,
-                "name": extracted["file_name"],
                 "file_name": extracted["file_name"],
-                "extension": ext,
-                "size": len(contents),
-                "status": "ready",
                 "row_count": extracted["row_count"],
                 "column_count": extracted["column_count"],
                 "columns": extracted["columns"],
-                "preview_rows": extracted["preview_rows"],
+                "rows": extracted["full_rows"],
                 "context_text": extracted["context_text"],
-            }
-        ]
+                "import_summary": import_summary,
+            },
+        )
+
+    file_payload: dict = {
+        "id": fid,
+        "name": extracted["file_name"],
+        "file_name": extracted["file_name"],
+        "extension": ext,
+        "size": len(contents),
+        "status": "ready",
+        "row_count": extracted["row_count"],
+        "column_count": extracted["column_count"],
+        "columns": extracted["columns"],
+        "preview_rows": extracted["preview_rows"],
+        "context_text": extracted["context_text"],
     }
+    if import_summary is not None:
+        file_payload["processed_count"] = import_summary.get("processed_count")
+        file_payload["success_count"] = import_summary.get("success_count")
+        file_payload["error_count"] = import_summary.get("error_count")
+        file_payload["import_errors"] = import_summary.get("import_errors")
+        file_payload["error_reason_counts"] = import_summary.get("error_reason_counts")
+
+    return {"uploaded_files": [file_payload]}
 
 
 @router.get("/uploaded-file/{file_id}")

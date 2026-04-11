@@ -2,7 +2,7 @@ import csv
 from io import StringIO
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordRequestForm
 
@@ -193,9 +193,12 @@ async def confirm_password_reset_endpoint(
 
 @router.get("/profile/me", response_model=ProfileRead, tags=["profile"])
 async def get_my_profile(
+    response: Response,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ) -> ProfileRead:
+    # Giảm bớt burst từ client gọi song song (layout + sidebar + activity): CDN/browser có thể tái sử dụng ngắn.
+    response.headers["Cache-Control"] = "private, max-age=10, stale-while-revalidate=30"
     profile = profile_service.get_profile(db, current_user.id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -305,7 +308,7 @@ async def list_customers_endpoint(
     search_name: Optional[str] = None,
     risk_level: Optional[str] = None,
     min_pd: Optional[float] = None,  # demo, chưa dùng
-    current_user: User = Depends(get_current_analyst_user),  # Analyst, Manager, Admin
+    current_user: User = Depends(get_current_active_user),
 ) -> PaginatedCustomers:
     return customer_intake_service.list_customers(page=page, limit=limit, search_name=search_name, risk_level=risk_level)
 
@@ -313,7 +316,7 @@ async def list_customers_endpoint(
 @router.get("/customers/{customer_id}", response_model=CustomerRead, tags=["customers"])
 async def get_customer_endpoint(
     customer_id: int,
-    current_user: User = Depends(get_current_analyst_user),  # Analyst, Manager, Admin
+    current_user: User = Depends(get_current_active_user),
 ) -> CustomerRead:
     customer = customer_intake_service.get_customer(customer_id)
     if not customer:
@@ -367,7 +370,7 @@ async def delete_customer_endpoint(
 @router.get("/customers/{customer_id}/history", response_model=List[CustomerHistoryItem], tags=["customers"])
 async def customer_history_endpoint(
     customer_id: int,
-    current_user: User = Depends(get_current_analyst_user),  # Analyst, Manager, Admin
+    current_user: User = Depends(get_current_active_user),
 ) -> List[CustomerHistoryItem]:
     return customer_intake_service.get_customer_history(customer_id)
 
@@ -375,7 +378,7 @@ async def customer_history_endpoint(
 @router.post("/customers/search", response_model=PaginatedCustomers, tags=["customers"])
 async def customer_search_endpoint(
     body: CustomerSearchBody,
-    current_user: User = Depends(get_current_analyst_user),  # Analyst, Manager, Admin
+    current_user: User = Depends(get_current_active_user),
 ) -> PaginatedCustomers:
     return customer_intake_service.advanced_customer_search(body)
 
@@ -934,7 +937,8 @@ async def upload_data_endpoint(
             error_count=import_summary["error_count"] if import_summary else None,
             imported_customers=import_summary["imported_customers"] if import_summary else None,
             imported_applications=import_summary["imported_applications"] if import_summary else None,
-            import_errors=None,
+            import_errors=import_summary.get("import_errors") if import_summary else None,
+            error_reason_counts=import_summary.get("error_reason_counts") if import_summary else None,
             error=None,
         )
     except Exception as exc:
