@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     FRONTEND_BASE_URL: str = "http://localhost:3000"
     BACKEND_PUBLIC_BASE_URL: str = "http://localhost:8000"
     AVATAR_STORAGE_DIR: str = ""
+    # Absolute path for customer CSV upload job files ({job_id}.json + data file). Empty = repo-root `.ai_chat_uploads`.
+    # Use a persistent/shared volume when running multiple API replicas (otherwise GET /jobs/{id}/content may 404 on another instance).
+    UPLOAD_JOBS_STORAGE_DIR: str = ""
 
     # Email Configuration
     SMTP_ENABLED: bool = False  # Set to True to enable real email sending

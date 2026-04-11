@@ -48,6 +48,15 @@ class StartChatRequest(BaseModel):
     initial_context: Optional[str] = Field(default=None, validation_alias=AliasChoices("initial_context", "initialContext"))
     model: Optional[str] = Field(default=None, validation_alias=AliasChoices("model", "chat_model", "chatModel"))
 
+    @field_validator("model", mode="before")
+    @classmethod
+    def _strip_empty_model(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
     @field_validator("initial_context", mode="before")
     @classmethod
     def _empty_to_none(cls, v):
@@ -65,6 +74,15 @@ class SendMessageRequest(BaseModel):
     message: str = Field(validation_alias=AliasChoices("message", "text", "content", "prompt"))
     customer_context: Optional[dict] = Field(default=None, validation_alias=AliasChoices("customer_context", "customerContext"))
     model: Optional[str] = Field(default=None, validation_alias=AliasChoices("model", "chat_model", "chatModel"))
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def _strip_empty_model_send(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
 
 
 class RenameSessionRequest(BaseModel):
@@ -223,6 +241,7 @@ def _normalize_model_id(model: str) -> str:
 
 def _gemini_model_catalog() -> List[dict]:
     # Defaults chosen to match typical "fast / thinking / pro" UX.
+    # Order is lowest tier first (used as safe default when client omits model).
     fast = _normalize_model_id(os.getenv("AI_CHAT_GEMINI_MODEL_FAST") or "gemini-2.5-flash-lite")
     thinking = _normalize_model_id(os.getenv("AI_CHAT_GEMINI_MODEL_THINKING") or "gemini-2.5-flash")
     pro = _normalize_model_id(os.getenv("AI_CHAT_GEMINI_MODEL_PRO") or "gemini-2.5-pro")
@@ -251,6 +270,31 @@ def _gemini_model_catalog() -> List[dict]:
         },
     ]
     return [m for m in out if m.get("id")]
+
+
+def _lowest_allowed_gemini_model(user: User) -> str:
+    """Smallest tier the user may use (catalog order: fast → thinking → pro)."""
+    role = _user_role(user)
+    for m in _gemini_model_catalog():
+        min_role = m.get("min_role", "viewer")
+        if _ROLE_ORDER.get(role, 0) >= _ROLE_ORDER.get(min_role, 0):
+            mid = str(m.get("id") or "").strip()
+            if mid:
+                return mid
+    return _normalize_model_id(os.getenv("AI_CHAT_GEMINI_MODEL_FAST") or "gemini-2.5-flash-lite")
+
+
+def _apply_gemini_model_on_service(chat_service: AIChatService, model_id: str) -> None:
+    if not (model_id or "").strip():
+        return
+    try:
+        from app.services.gemini_ai_chat_service import GeminiAIChatService
+
+        if isinstance(chat_service, GeminiAIChatService):
+            chat_service.model = _normalize_model_id(model_id)
+            chat_service.mode_tier = _gemini_tier_for_model(model_id)
+    except Exception:
+        pass
 
 
 def _assert_model_allowed(provider: str, model: str, user: User) -> str:
@@ -303,7 +347,7 @@ async def ai_chat_models(current_user: User = Depends(get_current_active_user)):
         if _ROLE_ORDER.get(role, 0) >= _ROLE_ORDER.get(min_role, 0):
             models.append({k: v for k, v in m.items() if k != "min_role"} | {"min_role": min_role})
 
-    default_model = _normalize_model_id(os.getenv("GEMINI_MODEL") or settings.gemini_model or "gemini-2.0-flash") or None
+    default_model = _lowest_allowed_gemini_model(current_user)
     return {"provider": provider, "role": role, "default_model": default_model, "models": models}
 
 
@@ -430,16 +474,12 @@ async def start_chat_session(
     
     provider = _provider_name()
     selected_model: Optional[str] = None
-    if request.model:
-        selected_model = _assert_model_allowed(provider, request.model, current_user)
-        try:
-            from app.services.gemini_ai_chat_service import GeminiAIChatService
-
-            if isinstance(chat_service, GeminiAIChatService):
-                chat_service.model = selected_model
-                chat_service.mode_tier = _gemini_tier_for_model(selected_model)
-        except Exception:
-            pass
+    if provider == "gemini":
+        if request.model:
+            selected_model = _assert_model_allowed(provider, request.model, current_user)
+        else:
+            selected_model = _lowest_allowed_gemini_model(current_user)
+        _apply_gemini_model_on_service(chat_service, selected_model)
     else:
         selected_model = getattr(chat_service, "model", None)
 
@@ -487,16 +527,12 @@ async def send_message(
     
     provider = _provider_name()
     selected_model: Optional[str] = None
-    if request.model:
-        selected_model = _assert_model_allowed(provider, request.model, current_user)
-        try:
-            from app.services.gemini_ai_chat_service import GeminiAIChatService
-
-            if isinstance(chat_service, GeminiAIChatService):
-                chat_service.model = selected_model
-                chat_service.mode_tier = _gemini_tier_for_model(selected_model)
-        except Exception:
-            pass
+    if provider == "gemini":
+        if request.model:
+            selected_model = _assert_model_allowed(provider, request.model, current_user)
+        else:
+            selected_model = _lowest_allowed_gemini_model(current_user)
+        _apply_gemini_model_on_service(chat_service, selected_model)
     else:
         selected_model = getattr(chat_service, "model", None)
     effective_customer_context = _merge_customer_context_with_powerbi(request.customer_context, current_user)

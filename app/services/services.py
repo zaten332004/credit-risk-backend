@@ -79,8 +79,34 @@ _chat_sessions: Dict[str, ChatSession] = {}
 _alerts: Dict[int, AlertRead] = {}
 _upload_jobs: Dict[str, UploadJob] = {}
 _upload_job_contents: Dict[str, Dict[str, Any]] = {}
-_UPLOAD_STORAGE_DIR = Path(__file__).resolve().parents[2] / ".ai_chat_uploads"
 _EXPORT_STORAGE_DIR = Path(__file__).resolve().parents[2] / ".exports"
+
+
+def _upload_jobs_storage_dir() -> Path:
+    """Directory for persisted upload job payloads (default: repo `.ai_chat_uploads`)."""
+    try:
+        from app.core.config import settings
+
+        raw = (getattr(settings, "UPLOAD_JOBS_STORAGE_DIR", None) or "").strip()
+        if raw:
+            return Path(raw).expanduser().resolve()
+    except Exception:
+        pass
+    return Path(__file__).resolve().parents[2] / ".ai_chat_uploads"
+
+
+def _resolve_uploaded_file_path(job_id: str, file_name: str) -> Optional[Path]:
+    """Binary upload path `{job_id}{ext}`, or any `{job_id}.*` except `.json` if the expected name mismatched."""
+    base = _upload_jobs_storage_dir()
+    ext = Path(file_name or "").suffix or ".bin"
+    primary = base / f"{job_id}{ext}"
+    if primary.is_file():
+        return primary
+    for p in sorted(base.glob(f"{job_id}.*")):
+        if not p.is_file() or p.suffix.lower() == ".json":
+            continue
+        return p
+    return None
 _alert_subscriptions: List[AlertSubscriptionRead] = []
 
 _id_counters: Dict[str, int] = {"customer": 0, "alert": 0, "subscription": 0}
@@ -1540,7 +1566,7 @@ def set_upload_job_content(job_id: str, payload: Dict[str, Any]) -> None:
     # Persist import_summary next to the uploaded file so /jobs/{id}/errors still works after a process restart (Railway).
     import_summary = payload.get("import_summary")
     if import_summary is not None:
-        meta_path = _UPLOAD_STORAGE_DIR / f"{job_id}.json"
+        meta_path = _upload_jobs_storage_dir() / f"{job_id}.json"
         if meta_path.exists():
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -1581,10 +1607,11 @@ def _normalize_upload_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def persist_upload_job_file(job_id: str, filename: str, content: bytes) -> None:
-    _UPLOAD_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    base = _upload_jobs_storage_dir()
+    base.mkdir(parents=True, exist_ok=True)
     ext = Path(filename or "uploaded_file").suffix or ".bin"
-    file_path = _UPLOAD_STORAGE_DIR / f"{job_id}{ext}"
-    meta_path = _UPLOAD_STORAGE_DIR / f"{job_id}.json"
+    file_path = base / f"{job_id}{ext}"
+    meta_path = base / f"{job_id}.json"
     file_path.write_bytes(content)
     meta_path.write_text(json.dumps({"file_name": filename or f"{job_id}{ext}"}, ensure_ascii=False), encoding="utf-8")
 
@@ -1596,18 +1623,20 @@ def get_upload_job_content(job_id: str) -> Optional[Dict[str, Any]]:
         _upload_job_contents[job_id] = normalized
         return normalized
 
-    meta_path = _UPLOAD_STORAGE_DIR / f"{job_id}.json"
+    meta_path = _upload_jobs_storage_dir() / f"{job_id}.json"
     if not meta_path.exists():
+        logger.warning("Upload job %s: missing meta file %s", job_id, meta_path)
         return None
 
     try:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         file_name = str(meta.get("file_name") or "").strip()
         if not file_name:
+            logger.warning("Upload job %s: meta %s has no file_name", job_id, meta_path)
             return None
-        ext = Path(file_name).suffix or ".bin"
-        file_path = _UPLOAD_STORAGE_DIR / f"{job_id}{ext}"
-        if not file_path.exists():
+        file_path = _resolve_uploaded_file_path(job_id, file_name)
+        if not file_path:
+            logger.warning("Upload job %s: no data file next to %s (expected stem %s)", job_id, meta_path, job_id)
             return None
 
         from app.services.ai_chat_file_context_service import AIChatFileContextService
@@ -1628,4 +1657,5 @@ def get_upload_job_content(job_id: str) -> Optional[Dict[str, Any]]:
         _upload_job_contents[job_id] = payload
         return payload
     except Exception:
+        logger.exception("Upload job %s: failed to rebuild content from disk", job_id)
         return None

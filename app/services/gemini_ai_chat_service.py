@@ -22,7 +22,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.models import ChatHistoryDB, ChatSessionDB
-from app.services.analytics_data_service import get_analysis_context, get_analysis_context_powerbi
+from app.services.analytics_data_service import (
+    get_analysis_context,
+    get_analysis_context_powerbi,
+    get_customer_focus_context,
+)
 from app.services.bank_faq_service import BankFAQService
 from app.services.chat_session_metadata import (
     build_message_with_attachments,
@@ -161,6 +165,44 @@ def _resolve_context_source(customer_context: Optional[Dict] = None) -> str:
     return "powerbi" if _powerbi_context_available() else "db"
 
 
+def _parse_ai_data_source(customer_context: Optional[Dict]) -> Optional[str]:
+    """
+    Nguồn dữ liệu do client chọn (POST /ai-chat/send customer_context).
+    None = không gửi key → giữ hành vi cũ (runtime Power BI / env / DB).
+    """
+    if not isinstance(customer_context, dict):
+        return None
+    if "ai_data_source" not in customer_context and "aiDataSource" not in customer_context:
+        return None
+    raw = customer_context.get("ai_data_source") or customer_context.get("aiDataSource") or ""
+    s = str(raw).strip().lower()
+    if s in ("portfolio", "portfolio_db", "db", "danh_muc", "system"):
+        return "portfolio"
+    if s in ("customer", "customer_db", "customers", "khach_hang"):
+        return "customer"
+    if s in ("upload", "file", "files"):
+        return "upload"
+    if s in ("powerbi", "power_bi", "pbi"):
+        return "powerbi"
+    return "portfolio"
+
+
+def _customer_id_from_context(customer_context: Optional[Dict]) -> Optional[int]:
+    if not isinstance(customer_context, dict):
+        return None
+    for key in ("customer_id", "customerId", "focus_customer_id", "focusCustomerId"):
+        v = customer_context.get(key)
+        if v is None:
+            continue
+        try:
+            n = int(v)
+            if n > 0:
+                return n
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _sanitize_system_context(raw_context: str, source: str) -> str:
     text = (raw_context or "").strip()
     if not text:
@@ -248,7 +290,20 @@ def _extract_additional_customer_context(customer_context: Optional[Dict]) -> st
     remaining = {
         key: value
         for key, value in customer_context.items()
-        if key not in {"uploaded_files", "uploadedFiles", "context_mode", "contextMode", "powerbi_runtime_config"}
+        if key
+        not in {
+            "uploaded_files",
+            "uploadedFiles",
+            "context_mode",
+            "contextMode",
+            "powerbi_runtime_config",
+            "ai_data_source",
+            "aiDataSource",
+            "customer_id",
+            "customerId",
+            "focus_customer_id",
+            "focusCustomerId",
+        }
     }
     return str(remaining).strip() if remaining else ""
 
@@ -285,31 +340,31 @@ def _extract_uploaded_files_metadata(customer_context: Optional[Dict]) -> List[D
 class GeminiAIChatService:
     MODE_PROMPTS = {
         "fast": (
-            "Che do Nhanh:\n"
-            "- Muc tieu la phan hoi nhanh nhat co the nhung van dung trong tam cau hoi.\n"
-            "- Uu tien cau tra loi ngan, ro, de quet nhanh.\n"
-            "- Dua ket luan chinh len dau, sau do moi neu 2-3 y bo tro quan trong.\n"
-            "- Han che dao qua sau vao cac huong phan tich phu neu nguoi dung khong yeu cau.\n"
-            "- Neu co the tra loi truc tiep bang ket luan, thi tra loi truc tiep truoc.\n"
-            "- Neu du lieu chua du, chi ra ngay phan thieu va de xuat buoc tiep theo ngan gon."
+            "Che do Nhanh (mo hinh nhe):\n"
+            "- Uu tien toc do: tra loi ngan, di thang vao ket luan phu hop cau hoi.\n"
+            "- Truoc khi viet, doc lai DUNG mot lan khoi [FILE DINH KEM] va/hoac [DU LIEU TONG HOP] neu co; neu khong co trong phien, noi ro la khong co du lieu do.\n"
+            "- Khong liet ke dai dong; chi neu 2-4 diem chinh co can cu tu ngu canh.\n"
+            "- Neu cau hoi mo ho: hoi lai DUNG MOT cau lam ro HOAC neu van tra loi duoc thi neu mot gia dinh hop ly va tiep tuc.\n"
+            "- Moi nhan dinh dinh luong (so, xep hang, muc rui ro) phai gan voi cot/truong hoac doan trong ngu canh (co the viet ten cot ngan gon).\n"
+            "- Neu thieu du lieu: mot dong 'Thieu: ...' + mot goi y bo sung cu the."
         ),
         "thinking": (
-            "Che do Tu duy:\n"
-            "- Muc tieu la can bang giua chat luong phan tich va do dai cau tra loi.\n"
-            "- Truoc khi tra loi, hay xac dinh nguoi dung dang hoi ve tong quan, liet ke, giai thich, so sanh, hay khuyen nghi.\n"
-            "- Neu bai toan phuc tap, hay chia nho van de thanh tung phan hop ly va lap luan theo trinh tu.\n"
-            "- Neu co nhieu cach dien giai, hay chon cach hop ly nhat dua tren du lieu hien co va noi ro gia dinh neu can.\n"
-            "- Uu tien chi ra ly do, dau hieu, mau hinh va moi lien he giua cac chi so.\n"
-            "- Ket thuc bang tong ket ngan hoac 1-3 khuyen nghi neu phu hop."
+            "Che do Tu duy (mo hinh can bang):\n"
+            "- Buoc 1 (noi bo): tom tat bang 1-2 cau nguoi dung muon gi + loai du lieu ban dang co (file / tong hop / ho so phien).\n"
+            "- Buoc 2: neu co nhieu cach hieu, chon cach hop ly nhat voi ngu canh; neu van mo, hoi mot cau lam ro truoc khi phan tich sau.\n"
+            "- Buoc 3: phan tich theo trinh tu — neu liet ke thi co tieu chi sap xep; neu so sanh thi neu tieu chi so sanh; neu rui ro thi neu dau hieu + can cu.\n"
+            "- Buoc 4: ket luan ngan o dau doan phan tich chinh, sau do dien giai; tranh lap lai nguyen van bang lon.\n"
+            "- Luon kiem tra: y kien co the trich xuat tu ngu canh khong; neu khong, noi 'trong du lieu hien khong co X' thay vi suy dien.\n"
+            "- Ket thuc bang 1-3 hanh dong goi y neu phu hop nghiep vu tin dung."
         ),
         "pro": (
-            "Che do Pro:\n"
-            "- Muc tieu la dua ra cau tra loi co chat luong phan tich cao nhat trong pham vi du lieu duoc cung cap.\n"
-            "- Hay suy nghi nhu mot chuyen gia phan tich rui ro/du lieu cap cao: xac dinh van de, nguyen nhan, tac dong, muc do uu tien va hanh dong de xuat.\n"
-            "- Khi danh gia rui ro, uu tien cac goc nhin: xac suat xay ra, muc do anh huong, dau hieu canh bao, nhom khach hang/phan khuc bi anh huong va tinh cap bach.\n"
-            "- Neu phu hop, co the trinh bay theo cau truc: Nhan dinh chinh, Bang chung tu du lieu, Phan tich nguyen nhan, Tac dong, Kien nghi hanh dong.\n"
-            "- Chu y tranh khang dinh qua muc khi du lieu chua du; thay vao do, neu ro muc do tin cay va thong tin can bo sung.\n"
-            "- Uu tien tinh thuc chien: khuyen nghi phai cu the, co the hanh dong duoc, va gan voi du lieu dang co."
+            "Che do Pro (mo hinh suy luan sau):\n"
+            "- Dong vai chuyen gia quan tri rui ro tin dung: lam ro pham vi, gia dinh, va gioi han tin cay cua ket luan.\n"
+            "- Dung khung: (1) Tom tat ngu canh & cau hoi (2) Bang chung tu du lieu — trich dan ten cot/muc tieu/nguong neu co (3) Phan tich nguyen nhan & tac dong (4) Rui ro con lai (5) Kien nghi hanh dong uu tien.\n"
+            "- Khi co nhieu kich ban, neu ro kich ban chinh + dieu kien de doi kich ban; tranh ket luan don nghia khi du lieu nhieu tap.\n"
+            "- Voi so lieu: neu xu huong, ngoai le, va y nghia nghiep vu; khong tao so 'dep' khong co trong ngu canh.\n"
+            "- Neu policy/SBV lien quan, ap dung khung da cho trong system prompt nhung khong gan nhom no neu du lieu khong du.\n"
+            "- Giu giong chuyen nghiep, co cau truc, san sang mo rong khi nguoi dung yeu cau chi tiet hon."
         ),
     }
     SYSTEM_PROMPT = (
@@ -321,6 +376,11 @@ class GeminiAIChatService:
         "3. Khong duoc gia vo da xem them du lieu ben ngoai prompt.\n"
         "4. Khong duoc bo sung so lieu, ten cot, ten bang, chi so hay ket luan ma prompt khong ho tro.\n"
         "5. Neu co khoi 'THONG TIN KET NOI POWER BI', khi hoi ve ten workspace/dataset phai tra loi dung theo khoi do — khong duoc dung ten dataset mau cong nghe.\n\n"
+        "Ky luat doc ngu canh (quan trong):\n"
+        "- Cac khoi dau [FILE DINH KEM ...], [DU LIEU TONG HOP ...], [HO SO/NGU CANH KHOI TAO PHIEN ...], [NGU CANH FAQ NGAN HANG] la TOAN BO nguon ban duoc phep dung trong phien.\n"
+        "- Neu cau hoi ve thong tin khong xuat hien trong cac khoi nay, hay noi ro: 'Trong du lieu dang co trong phien khong co thong tin ve ...' va goi y nguoi dung doi nguon du lieu, tai file, hoac cung cap them.\n"
+        "- Khi dua ra con so, ten khach, xep hang, hoac ket luan dinh luong, phai co can cu (ten cot / dong / doan) tu ngu canh; co the tom tat ngan, khong can dan dai nguyen van.\n"
+        "- Neu nguoi dung viet rat ngan hoac khong ro, hay hoi lai DUNG MOT cau lam ro HOAC neu van tra loi duoc thi neu gia dinh ban dang hieu va tiep tuc.\n\n"
         "Nguyen tac hieu yeu cau:\n"
         "- Truoc khi tra loi, ngam xac dinh nguoi dung dang muon: tong quan, liet ke, giai thich, so sanh, xep hang, tim bat thuong, danh gia rui ro, hay de xuat hanh dong.\n"
         "- Chon hinh thuc tra loi phu hop voi cau hoi thay vi dung mot khuon mau co dinh.\n"
@@ -400,7 +460,7 @@ class GeminiAIChatService:
         mode_prompt = self.MODE_PROMPTS.get(self.mode_tier or "", "")
         if not mode_prompt:
             return self.SYSTEM_PROMPT
-        return f"{self.SYSTEM_PROMPT} {mode_prompt}"
+        return f"{self.SYSTEM_PROMPT}\n\n---\n{mode_prompt}"
 
     def start_chat_session(
         self,
@@ -494,42 +554,85 @@ class GeminiAIChatService:
             now = datetime.utcnow()
             cache_ttl_hours = 1
             runtime_powerbi_enabled = _runtime_powerbi_context_available(customer_context)
+            ai_src = _parse_ai_data_source(customer_context)
 
             if not skip_data_context:
-                if runtime_powerbi_enabled:
+                if ai_src == "upload":
+                    data_context = ""
+                    context_source = ""
+                elif ai_src == "customer":
+                    cid = _customer_id_from_context(customer_context)
                     try:
-                        context_source = "powerbi"
-                        data_context = _sanitize_system_context(
-                            get_analysis_context_powerbi(runtime_user=_runtime_powerbi_user(customer_context)),
-                            context_source,
-                        )
+                        if cid:
+                            data_context = _sanitize_system_context(
+                                get_customer_focus_context(session, cid),
+                                "db",
+                            )
+                        else:
+                            data_context = _sanitize_system_context(get_analysis_context(session), "db")
+                        context_source = "db"
                     except Exception as exc:
-                        logger.warning("Could not load runtime Power BI context for AI: %s", exc)
+                        logger.warning("Could not load customer focus context for AI: %s", exc)
                     if data_context.strip():
                         chat_session.data_context_cached = data_context
                         chat_session.data_context_cached_at = now
-                elif (
-                    chat_session.data_context_cached
-                    and chat_session.data_context_cached_at
-                    and (now - chat_session.data_context_cached_at).total_seconds() < cache_ttl_hours * 3600
-                ):
-                    data_context = chat_session.data_context_cached
-                else:
+                elif ai_src == "powerbi":
                     try:
-                        context_source = _resolve_context_source(customer_context)
-                        if context_source == "powerbi":
+                        context_source = "powerbi"
+                        ru = _runtime_powerbi_user(customer_context) if runtime_powerbi_enabled else None
+                        data_context = _sanitize_system_context(
+                            get_analysis_context_powerbi(runtime_user=ru),
+                            context_source,
+                        )
+                    except Exception as exc:
+                        logger.warning("Could not load Power BI context for AI (explicit source): %s", exc)
+                    if data_context.strip():
+                        chat_session.data_context_cached = data_context
+                        chat_session.data_context_cached_at = now
+                elif ai_src == "portfolio":
+                    try:
+                        context_source = "db"
+                        data_context = _sanitize_system_context(get_analysis_context(session), "db")
+                    except Exception as exc:
+                        logger.warning("Could not load portfolio DB context for AI: %s", exc)
+                    if data_context.strip():
+                        chat_session.data_context_cached = data_context
+                        chat_session.data_context_cached_at = now
+                else:
+                    if runtime_powerbi_enabled:
+                        try:
+                            context_source = "powerbi"
                             data_context = _sanitize_system_context(
                                 get_analysis_context_powerbi(runtime_user=_runtime_powerbi_user(customer_context)),
                                 context_source,
                             )
-                        else:
-                            data_context = _sanitize_system_context(get_analysis_context(session), "db")
-                    except Exception as exc:
-                        logger.warning("Could not load analytics context for AI: %s", exc)
+                        except Exception as exc:
+                            logger.warning("Could not load runtime Power BI context for AI: %s", exc)
+                        if data_context.strip():
+                            chat_session.data_context_cached = data_context
+                            chat_session.data_context_cached_at = now
+                    elif (
+                        chat_session.data_context_cached
+                        and chat_session.data_context_cached_at
+                        and (now - chat_session.data_context_cached_at).total_seconds() < cache_ttl_hours * 3600
+                    ):
+                        data_context = chat_session.data_context_cached
+                    else:
+                        try:
+                            context_source = _resolve_context_source(customer_context)
+                            if context_source == "powerbi":
+                                data_context = _sanitize_system_context(
+                                    get_analysis_context_powerbi(runtime_user=_runtime_powerbi_user(customer_context)),
+                                    context_source,
+                                )
+                            else:
+                                data_context = _sanitize_system_context(get_analysis_context(session), "db")
+                        except Exception as exc:
+                            logger.warning("Could not load analytics context for AI: %s", exc)
 
-                    if data_context.strip():
-                        chat_session.data_context_cached = data_context
-                        chat_session.data_context_cached_at = now
+                        if data_context.strip():
+                            chat_session.data_context_cached = data_context
+                            chat_session.data_context_cached_at = now
 
             pb_bind = _powerbi_binding_header(customer_context)
             if pb_bind.strip() and not skip_data_context:
@@ -585,6 +688,30 @@ class GeminiAIChatService:
             additional_customer_context = _extract_additional_customer_context(customer_context)
             if additional_customer_context:
                 user_text = "[THONG TIN KHACH HANG BO SUNG]\n" + additional_customer_context + "\n\n" + user_text
+
+            data_hints: List[str] = []
+            if uploaded_now.strip():
+                data_hints.append(
+                    "Trong yeu cau nay co [FILE DINH KEM]: bat buoc tra loi dua tren noi dung file; "
+                    "khong duoc noi khong co du lieu neu van ban file co du lieu (ke ca khi cau hoi ngan)."
+                )
+            if not skip_data_context and (data_context_for_llm or "").strip():
+                src_lbl = (context_source or "he thong").upper()
+                data_hints.append(
+                    f"Phia tren da co luot he thong voi [DU LIEU TONG HOP ({src_lbl})]: dung noi dung do khi hoi ve danh muc, khach, snapshot, chi so; "
+                    "khong bia them bang/ten cot khong co trong ngu canh."
+                )
+            if session_initial_context.strip():
+                data_hints.append(
+                    "Phien co [HO SO/NGU CANH KHOI TAO] o cac luot dau: tham chieu khi lien quan toi ho so/file da ghi nhan khi mo phien."
+                )
+            if data_hints:
+                user_text = (
+                    "[HUONG DAN NOI BO — KHONG DOC NGUYEN VAN CHO NGUOI DUNG]\n"
+                    + "\n".join(f"- {h}" for h in data_hints)
+                    + "\n\n"
+                    + user_text
+                )
 
             contents.append({"role": "user", "parts": [{"text": user_text}]})
 

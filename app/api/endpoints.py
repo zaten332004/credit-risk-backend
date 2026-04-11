@@ -1098,7 +1098,14 @@ async def job_content_endpoint(
 ) -> UploadJobContentResponse:
     payload = services.get_upload_job_content(job_id)
     if not payload:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload content not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "Upload content not found for this job. "
+                "It may be invalid/expired, the API may have restarted without the file on disk, "
+                "or another server instance handled the upload (use UPLOAD_JOBS_STORAGE_DIR on a shared volume or a single worker)."
+            ),
+        )
     safe_offset = max(0, offset)
     safe_limit = max(1, min(limit, 500))
     rows = payload.get("rows") or []
@@ -1128,7 +1135,14 @@ async def job_errors_endpoint(
 ) -> UploadJobErrorsResponse:
     payload = services.get_upload_job_content(job_id)
     if not payload:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload content not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "Upload content not found for this job. "
+                "It may be invalid/expired, the API may have restarted without the file on disk, "
+                "or another server instance handled the upload (use UPLOAD_JOBS_STORAGE_DIR on a shared volume or a single worker)."
+            ),
+        )
 
     import_summary = payload.get("import_summary") or {}
     errors = import_summary.get("import_errors") or []

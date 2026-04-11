@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.models import (
     CustomerDB,
+    LoanApplicationDB,
     LoanFacilityDB,
     PortfolioSnapshotDB,
     RiskPredictionDB,
@@ -751,6 +752,91 @@ def get_analysis_context(
     if not parts:
         return "Hiện chưa có dữ liệu tổng hợp từ hệ thống."
     return "\n".join(parts)
+
+
+def get_customer_focus_context(session: Session, customer_id: int) -> str:
+    """
+    Snapshot một khách hàng (hồ sơ + khoản vay/ứng dụng + dự báo rủi ro gần nhất) cho AI chat.
+    """
+    cid = _safe_int(customer_id)
+    if cid is None or cid <= 0:
+        return "Không có mã khách hàng hợp lệ."
+
+    cust = session.query(CustomerDB).filter(CustomerDB.customer_id == cid).first()
+    if not cust:
+        return f"Không tìm thấy khách hàng với ID {cid}."
+
+    lines: List[str] = []
+    lines.append(f"--- HỒ SƠ KHÁCH HÀNG (customer_id={cid}) ---")
+    lines.append(f"Họ tên: {cust.full_name or '—'}")
+    if cust.external_customer_ref:
+        lines.append(f"Mã tham chiếu: {cust.external_customer_ref}")
+    if cust.age is not None:
+        lines.append(f"Tuổi: {cust.age}")
+    if cust.monthly_income is not None:
+        lines.append(f"Thu nhập/tháng (VND): {_format_number(_decimal_to_float(cust.monthly_income))}")
+    if cust.credit_score is not None:
+        lines.append(f"Điểm tín dụng (nội bộ): {cust.credit_score}")
+    if cust.employment_status:
+        lines.append(f"Việc làm: {cust.employment_status}")
+    if cust.email:
+        lines.append(f"Email: {cust.email}")
+    if cust.phone_number:
+        lines.append(f"SĐT: {cust.phone_number}")
+
+    facs = (
+        session.query(LoanFacilityDB)
+        .filter(LoanFacilityDB.customer_id == cid)
+        .order_by(LoanFacilityDB.created_at.desc())
+        .limit(25)
+        .all()
+    )
+    lines.append("\n--- Facility / khoản vay ---")
+    if facs:
+        for i, f in enumerate(facs, 1):
+            lines.append(
+                f"  {i}. facility_id={f.facility_id}, loại={f.facility_type or '—'}, "
+                f"duyệt={_format_number(_decimal_to_float(f.approved_amount))} VND, "
+                f"trạng thái={f.status}, lãi suất={f.interest_rate if f.interest_rate is not None else '—'}"
+            )
+    else:
+        lines.append("  (Chưa có facility)")
+
+    apps = (
+        session.query(LoanApplicationDB)
+        .filter(LoanApplicationDB.customer_id == cid)
+        .order_by(LoanApplicationDB.created_at.desc())
+        .limit(15)
+        .all()
+    )
+    lines.append("\n--- Đơn xin vay (ứng dụng) ---")
+    if apps:
+        for i, a in enumerate(apps, 1):
+            lines.append(
+                f"  {i}. application_id={a.application_id}, số tiền={_format_number(_decimal_to_float(a.loan_amount))} VND, "
+                f"kỳ={a.loan_term} tháng, trạng thái={a.loan_status}, loại vay={a.loan_type or '—'}"
+            )
+    else:
+        lines.append("  (Chưa có đơn)")
+
+    preds = (
+        session.query(RiskPredictionDB)
+        .filter(RiskPredictionDB.customer_id == cid)
+        .order_by(RiskPredictionDB.predicted_at.desc())
+        .limit(5)
+        .all()
+    )
+    lines.append("\n--- Dự báo rủi ro (gần nhất) ---")
+    if preds:
+        for i, p in enumerate(preds, 1):
+            lines.append(
+                f"  {i}. risk_score={float(p.risk_score):.6f}, mức={p.risk_level or '—'}, "
+                f"thời điểm={p.predicted_at.isoformat() if p.predicted_at else '—'}"
+            )
+    else:
+        lines.append("  (Chưa có bản ghi dự báo)")
+
+    return "\n".join(lines)
 
 
 def get_analysis_context_powerbi(runtime_user: Optional[Any] = None) -> str:
