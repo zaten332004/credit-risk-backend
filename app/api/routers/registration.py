@@ -5,6 +5,7 @@ User registration, email verification, and manager approval
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.security import create_access_token
 from app.db.session import SessionLocal
 from app.core.security import get_current_admin_user
 from app.schemas.schemas import (
@@ -50,6 +51,18 @@ async def register_user(
 
     if not success:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
+
+    # Treat signup success as authenticated pending session.
+    access_token = create_access_token(
+        data={
+            "sub": response.email,
+            "role": response.role or response.registration_type,
+            "status": response.status,
+        }
+    )
+    response.access_token = access_token
+    response.role = response.role or response.registration_type
+    response.has_pin = False
 
     return response
 

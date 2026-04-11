@@ -310,7 +310,11 @@ class UserRegistrationResponse(BaseModel):
     username: str
     email: str
     registration_type: str
+    role: str | None = None
     status: str  # pending, approved, rejected, verified
+    access_token: str | None = None
+    token_type: str = "bearer"
+    has_pin: bool = False
     is_email_verified: bool
     verification_token: str | None = None  # Token for email verification
     verification_link: str | None = None  # Full URL for verification
