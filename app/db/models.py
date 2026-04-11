@@ -44,6 +44,8 @@ class UserDB(Base):
     approved_by = Column(BigInteger, ForeignKey("User.user_id"), nullable=True)  # admin who approved
     approved_at = Column(DateTime, nullable=True)
     rejection_reason = Column(String(500), nullable=True)
+    pin_hash = Column(String(255), nullable=True)
+    pin_updated_at = Column(DateTime, nullable=True)
     
     # Audit
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

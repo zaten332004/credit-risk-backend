@@ -85,6 +85,12 @@ A comprehensive financial risk analysis system with AI-powered chatbot, loan man
    python app/db/init_db.py
    ```
 
+   If you are upgrading an existing database, run incremental migrations before starting API:
+   ```bash
+   # Add account PIN columns to User table
+   mysql -u <user> -p <database_name> < scripts/migrations/20260411_add_user_pin_columns.up.sql
+   ```
+
 6. **Run Development Server**
    ```powershell
    .\run_dev.ps1

@@ -11,6 +11,7 @@ from app.core.security import (
     authenticate_user_by_username_or_email,
     create_access_token,
     get_current_active_user,
+    get_current_approved_user,
     get_current_admin_user,
     get_current_manager_or_admin_user,
     get_current_manager_user,
@@ -38,6 +39,9 @@ from app.schemas.schemas import (
     HealthResponse,
     LoginRequest,
     JobStatusResponse,
+    AccountPinSetBody,
+    AccountPinChangeBody,
+    AccountPinEmailChangeBody,
     ManagerUpgradeNominationCreate,
     ManagerUpgradeRequestCreate,
     ManagerUpgradeRequestRead,
@@ -45,6 +49,7 @@ from app.schemas.schemas import (
     OAuthLoginRequest,
     PasswordResetConfirmBody,
     PasswordResetRequestBody,
+    PendingAccountStatusResponse,
     PaginatedCustomers,
     PortfolioCompareBody,
     PortfolioCompareResponse,
@@ -84,6 +89,7 @@ from app.services.oauth_service import OAuthService
 from app.services.ai_chat_file_context_service import AIChatFileContextService
 from app.services.audit_service import log_action
 from app.services import customer_intake_service
+from app.services import account_pin_service
 from app.services import password_reset_service
 from app.services import profile_service
 from app.services import services
@@ -129,7 +135,8 @@ async def login_for_access_token_endpoint(body: LoginRequest) -> Token:
     access_token = create_access_token(
         data={
             "sub": user_dict.get("email"),
-            "role": user_dict.get("role", "viewer")
+            "role": user_dict.get("role", "viewer"),
+            "status": user_dict.get("status", "pending"),
         }
     )
     
@@ -138,7 +145,9 @@ async def login_for_access_token_endpoint(body: LoginRequest) -> Token:
         user_id=user_dict.get("id"),
         email=user_dict.get("email"),
         full_name=user_dict.get("full_name"),
-        role=user_dict.get("role", "viewer")
+        role=user_dict.get("role", "viewer"),
+        status=user_dict.get("status", "pending"),
+        has_pin=bool(user_dict.get("has_pin")),
     )
 
 
@@ -189,6 +198,85 @@ async def confirm_password_reset_endpoint(
     if not success:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
     return MessageResponse(message=message)
+
+
+@router.get("/auth/pending/status", response_model=PendingAccountStatusResponse, tags=["auth"])
+async def get_pending_status_endpoint(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+) -> PendingAccountStatusResponse:
+    try:
+        payload = account_pin_service.get_pending_account_status(db, current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    return PendingAccountStatusResponse(**payload)
+
+
+@router.post("/auth/pin/set", response_model=MessageResponse, tags=["auth"])
+async def set_account_pin_endpoint(
+    body: AccountPinSetBody,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    try:
+        success, message = account_pin_service.set_account_pin(db, current_user.id, body.pin)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if not success:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
+    return MessageResponse(message=message)
+
+
+@router.post("/auth/pin/change", response_model=MessageResponse, tags=["auth"])
+async def change_account_pin_endpoint(
+    body: AccountPinChangeBody,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    try:
+        success, message = account_pin_service.change_account_pin(db, current_user.id, body.old_pin, body.new_pin)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if not success:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
+    return MessageResponse(message=message)
+
+
+@router.post("/profile/change-email/pin", response_model=EmailChangeConfirmResponse, tags=["profile"])
+async def change_email_with_pin_endpoint(
+    body: AccountPinEmailChangeBody,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+) -> EmailChangeConfirmResponse:
+    try:
+        success, message = account_pin_service.change_email_with_pin(
+            db,
+            current_user.id,
+            body.new_email,
+            body.pin,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if not success:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
+
+    profile = profile_service.get_profile(db, current_user.id)
+    if not profile:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found")
+
+    access_token = create_access_token(
+        data={
+            "sub": profile.email,
+            "role": profile.role,
+            "status": profile.status or "pending",
+        }
+    )
+    return EmailChangeConfirmResponse(
+        message=message,
+        email=profile.email,
+        access_token=access_token,
+        role=profile.role,
+    )
 
 
 @router.get("/profile/me", response_model=ProfileRead, tags=["profile"])
@@ -646,7 +734,7 @@ async def portfolio_compare_endpoint(
 async def alerts_list_endpoint(
     status: Optional[str] = None,
     type: Optional[str] = None,  # type: ignore[assignment]
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_approved_user),
 ) -> List[AlertRead]:
     return services.list_alerts(status=status, type_=type)
 
@@ -654,7 +742,7 @@ async def alerts_list_endpoint(
 @router.post("/alerts/subscribe", response_model=AlertSubscriptionRead, tags=["alerts"])
 async def alerts_subscribe_endpoint(
     body: AlertSubscriptionCreate,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_approved_user),
 ) -> AlertSubscriptionRead:
     return services.subscribe_alerts(body)
 
@@ -663,7 +751,7 @@ async def alerts_subscribe_endpoint(
 async def alerts_resolve_endpoint(
     alert_id: int,
     body: AlertResolveBody,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_approved_user),
 ) -> AlertRead:
     result = services.resolve_alert(alert_id, body, actor_user_id=current_user.id)
     if not result:
@@ -784,7 +872,7 @@ async def admin_export_download_endpoint(
 @router.post("/manager-upgrade/request", response_model=ManagerUpgradeRequestRead, tags=["registration"])
 async def create_manager_upgrade_request(
     body: ManagerUpgradeRequestCreate,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_approved_user),
     db: Session = Depends(get_db),
 ) -> ManagerUpgradeRequestRead:
     try:
@@ -825,7 +913,7 @@ async def list_manager_upgrade_requests(
 
 @router.get("/manager-upgrade/my-requests", response_model=List[ManagerUpgradeRequestRead], tags=["registration"])
 async def list_my_manager_upgrade_requests(
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_approved_user),
     db: Session = Depends(get_db),
 ) -> List[ManagerUpgradeRequestRead]:
     return ManagerUpgradeService.list_requests(db, target_user_id=current_user.id)
@@ -860,7 +948,7 @@ async def vote_manager_upgrade_request(
 async def upload_data_endpoint(
     file: UploadFile = File(...),
     type: str = "customers",  # type: ignore[assignment]
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_approved_user),
     db: Session = Depends(get_db),
 ) -> UploadJobResponse:
     # Demo: chưa parse file; chỉ tạo job
@@ -973,7 +1061,7 @@ async def job_content_endpoint(
     job_id: str,
     offset: int = 0,
     limit: int = 200,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_approved_user),
 ) -> UploadJobContentResponse:
     payload = services.get_upload_job_content(job_id)
     if not payload:
@@ -1003,7 +1091,7 @@ async def job_errors_endpoint(
     job_id: str,
     offset: int = 0,
     limit: int = 200,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_approved_user),
 ) -> UploadJobErrorsResponse:
     payload = services.get_upload_job_content(job_id)
     if not payload:
@@ -1029,7 +1117,7 @@ async def job_errors_endpoint(
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse, tags=["ingestion"])
 async def job_status_endpoint(
     job_id: str,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_approved_user),
 ) -> JobStatusResponse:
     return services.get_job_status(job_id)
 
@@ -1037,7 +1125,7 @@ async def job_status_endpoint(
 @router.get("/upload/history", response_model=List[UploadHistoryItemRead], tags=["ingestion"])
 async def upload_history_endpoint(
     limit: int = 5,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_approved_user),
 ) -> List[UploadHistoryItemRead]:
     user_filter = None if current_user.role in {"admin", "manager"} else current_user.id
     rows = services.list_upload_history(user_id=user_filter, limit=limit)

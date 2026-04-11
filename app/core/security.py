@@ -41,6 +41,15 @@ def normalize_role_name(role_name: Optional[str]) -> str:
     return value or "viewer"
 
 
+def _normalize_account_status(status: Optional[str]) -> str:
+    value = (status or "").strip().lower()
+    return value or "pending"
+
+
+def _has_pin(user: UserDB) -> bool:
+    return bool((user.pin_hash or "").strip())
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     plain_password = (plain_password or "").strip()
     hashed_password = (hashed_password or "").strip()
@@ -84,6 +93,8 @@ def authenticate_user(email: str, password: str) -> Optional[User]:
             full_name=user.username,
             is_active=True,
             is_admin=role_name == "admin",
+            status=_normalize_account_status(user.status),
+            has_pin=_has_pin(user),
         )
     finally:
         db.close()
@@ -131,6 +142,8 @@ def authenticate_user_by_username_or_email(username_or_email: str, password: str
             "is_active": True,
             "is_admin": role_name == "admin",
             "role": role_name,
+            "status": _normalize_account_status(user.status),
+            "has_pin": _has_pin(user),
         }
     finally:
         db.close()
@@ -178,6 +191,8 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(h
             is_active=True,
             role=role_name,
             is_admin=role_name == "admin",
+            status=_normalize_account_status(user.status),
+            has_pin=_has_pin(user),
         )
     finally:
         db.close()
@@ -189,26 +204,33 @@ async def get_current_active_user(current_user: User = Depends(get_current_user)
     return current_user
 
 
-async def get_current_admin_user(current_user: User = Depends(get_current_active_user)) -> User:
+async def get_current_approved_user(current_user: User = Depends(get_current_active_user)) -> User:
+    status = _normalize_account_status(getattr(current_user, "status", None))
+    if status != "approved":
+        raise HTTPException(status_code=403, detail=f"Account is {status}. Approval required.")
+    return current_user
+
+
+async def get_current_admin_user(current_user: User = Depends(get_current_approved_user)) -> User:
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     return current_user
 
 
-async def get_current_manager_or_admin_user(current_user: User = Depends(get_current_active_user)) -> User:
+async def get_current_manager_or_admin_user(current_user: User = Depends(get_current_approved_user)) -> User:
     if current_user.role not in {"admin", "manager"}:
         raise HTTPException(status_code=403, detail="Manager or admin permission required")
     return current_user
 
 
-async def get_current_manager_user(current_user: User = Depends(get_current_active_user)) -> User:
+async def get_current_manager_user(current_user: User = Depends(get_current_approved_user)) -> User:
     """Require Manager role (or Admin with admin override)"""
     if current_user.role not in {"admin", "manager"}:
         raise HTTPException(status_code=403, detail="Manager permission required")
     return current_user
 
 
-async def get_current_analyst_user(current_user: User = Depends(get_current_active_user)) -> User:
+async def get_current_analyst_user(current_user: User = Depends(get_current_approved_user)) -> User:
     """Require Analyst role (or higher: Manager, Admin)"""
     if current_user.role not in {"admin", "manager", "analyst"}:
         raise HTTPException(status_code=403, detail="Analyst permission required")

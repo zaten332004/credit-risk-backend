@@ -230,60 +230,22 @@ class RegistrationService:
                 "role_id": user.role_id,
             }
 
-            # For analyst: auto-approve after email verification
-            if user.user_type == "analyst":
-                user.status = "approved"
-                # Assign analyst role
-                analyst_role = (
-                    db.query(RoleDB)
-                    .filter(RoleDB.role_name.in_(["risk analyst", "Risk Analyst", "analyst", "Analyst"]))
-                    .first()
-                )
-                if analyst_role:
-                    user.role_id = analyst_role.role_id
-
-                log_action(
-                    db,
-                    user_id=user.user_id,
-                    action="VERIFY_EMAIL",
-                    entity_type="UserRegistration",
-                    entity_id=user.user_id,
-                    old_value=old_state,
-                    new_value={
-                        "status": user.status,
-                        "is_email_verified": user.is_email_verified,
-                        "role_id": user.role_id,
-                    },
-                )
-                
-                db.commit()
-
-                # Send approval email to analyst
-                EmailService.send_registration_approved_email(
-                    recipient_email=user.email,
-                    full_name=user.full_name,
-                    login_url=RegistrationService._frontend_login_url()
-                )
-
-                return True, "Email verified! Your analyst account is now active. Check your email for login instructions."
-            else:
-                # Manager: email verified, awaiting admin approval
-                # Keep status as pending until admin approves
-                log_action(
-                    db,
-                    user_id=user.user_id,
-                    action="VERIFY_EMAIL",
-                    entity_type="UserRegistration",
-                    entity_id=user.user_id,
-                    old_value=old_state,
-                    new_value={
-                        "status": user.status,
-                        "is_email_verified": user.is_email_verified,
-                        "role_id": user.role_id,
-                    },
-                )
-                db.commit()
-                return True, "Email verified successfully! Your account is pending admin approval."
+            # Keep all registration types pending until admin approval.
+            log_action(
+                db,
+                user_id=user.user_id,
+                action="VERIFY_EMAIL",
+                entity_type="UserRegistration",
+                entity_id=user.user_id,
+                old_value=old_state,
+                new_value={
+                    "status": user.status,
+                    "is_email_verified": user.is_email_verified,
+                    "role_id": user.role_id,
+                },
+            )
+            db.commit()
+            return True, "Email verified successfully! Your account is pending admin approval."
 
         except Exception as e:
             db.rollback()
@@ -327,14 +289,21 @@ class RegistrationService:
                 user.approved_by = approved_by
                 user.approved_at = datetime.utcnow()
                 
-                # Assign manager role
-                manager_role = (
-                    db.query(RoleDB)
-                    .filter(RoleDB.role_name.in_(["manager", "Manager"]))
-                    .first()
-                )
-                if manager_role:
-                    user.role_id = manager_role.role_id
+                # Assign role based on registration type
+                if (user.user_type or "").strip().lower() == "manager":
+                    selected_role = (
+                        db.query(RoleDB)
+                        .filter(RoleDB.role_name.in_(["manager", "Manager"]))
+                        .first()
+                    )
+                else:
+                    selected_role = (
+                        db.query(RoleDB)
+                        .filter(RoleDB.role_name.in_(["risk analyst", "Risk Analyst", "analyst", "Analyst"]))
+                        .first()
+                    )
+                if selected_role:
+                    user.role_id = selected_role.role_id
 
                 log_action(
                     db,
@@ -414,14 +383,14 @@ class RegistrationService:
     def list_registrations(db: Session, user_type: Optional[str] = None, status: Optional[str] = None) -> list[dict]:
         """Get registrations for admin review filtered by type and status."""
         approver_alias = aliased(UserDB)
-        effective_user_type = (user_type or "manager").strip().lower()
+        effective_user_type = (user_type or "").strip().lower()
         effective_status = (status or "all").strip().lower()
 
         query = (
             db.query(UserDB, approver_alias)
             .outerjoin(approver_alias, approver_alias.user_id == UserDB.approved_by)
         )
-        if effective_user_type:
+        if effective_user_type and effective_user_type != "all":
             query = query.filter(UserDB.user_type == effective_user_type)
         if effective_status != "all":
             query = query.filter(UserDB.status == effective_status)

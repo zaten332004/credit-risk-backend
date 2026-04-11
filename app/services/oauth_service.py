@@ -130,7 +130,7 @@ class OAuthService:
             password_hash=temp_password,
             full_name=full_name,
             user_type="analyst",
-            status="approved",
+            status="pending",
             is_email_verified=True,
             role_id=analyst_role.role_id,
         )
@@ -144,7 +144,13 @@ class OAuthService:
         role = db.query(RoleDB).filter(RoleDB.role_id == user.role_id).first()
         role_name = normalize_role_name(role.role_name if role else "viewer")
 
-        access_token = create_access_token(data={"sub": user.email, "role": role_name})
+        access_token = create_access_token(
+            data={
+                "sub": user.email,
+                "role": role_name,
+                "status": (user.status or "pending"),
+            }
+        )
         return Token(
             access_token=access_token,
             token_type="bearer",
@@ -152,6 +158,8 @@ class OAuthService:
             email=user.email,
             full_name=user.full_name or user.username,
             role=role_name,
+            status=(user.status or "pending"),
+            has_pin=bool((user.pin_hash or "").strip()),
         )
 
     @staticmethod

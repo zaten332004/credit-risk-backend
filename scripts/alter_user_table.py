@@ -21,6 +21,8 @@ def execute_alter_table():
         ("approved_by", "BIGINT NULL"),
         ("approved_at", "DATETIME NULL"),
         ("rejection_reason", "VARCHAR(500) NULL"),
+        ("pin_hash", "VARCHAR(255) NULL"),
+        ("pin_updated_at", "DATETIME NULL"),
     ]
 
     inspector = inspect(engine)

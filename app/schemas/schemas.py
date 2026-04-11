@@ -23,6 +23,8 @@ class Token(BaseModel):
     email: str
     full_name: str | None = None
     role: str  # admin, manager, risk analyst, viewer
+    status: str | None = None
+    has_pin: bool = False
 
 
 class TokenData(BaseModel):
@@ -43,6 +45,28 @@ class PasswordResetConfirmBody(BaseModel):
     email: str = Field(..., description="Email address")
     code: str = Field(..., min_length=4, max_length=10, description="Verification code")
     new_password: str = Field(..., min_length=6, description="New password")
+
+
+class AccountPinSetBody(BaseModel):
+    pin: str = Field(..., pattern=r"^\d{6}$", description="6-digit PIN")
+
+
+class AccountPinChangeBody(BaseModel):
+    old_pin: str = Field(..., pattern=r"^\d{6}$", description="Current 6-digit PIN")
+    new_pin: str = Field(..., pattern=r"^\d{6}$", description="New 6-digit PIN")
+
+
+class AccountPinEmailChangeBody(BaseModel):
+    new_email: str = Field(..., description="New email address")
+    pin: str = Field(..., pattern=r"^\d{6}$", description="Current 6-digit PIN")
+
+
+class PendingAccountStatusResponse(BaseModel):
+    user_id: int
+    email: str
+    role: str
+    status: str
+    has_pin: bool
 
 
 class MessageResponse(BaseModel):
@@ -79,6 +103,8 @@ class User(BaseModel):
     is_active: bool = True
     role: str = "viewer"  # admin, manager, risk analyst, viewer
     is_admin: bool = False
+    status: str | None = None
+    has_pin: bool = False
 
 
 class UserCreate(BaseModel):
