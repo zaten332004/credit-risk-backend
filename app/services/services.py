@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import case, desc, func, literal, or_
+from sqlalchemy import case, desc, func, literal, or_, text
 from sqlalchemy.orm import aliased
 
 from app.core.security import normalize_role_name, pwd_context
@@ -28,8 +28,6 @@ from app.db.models import (
     RoleDB,
     UserDB,
 )
-from app.db.loan_product_models import LoanApprovalDB
-from app.db.risk_models import LoanClassificationDB, ProvisionAllocationDB
 from app.db.session import SessionLocal
 from app.models.models import Alert, ChatSession, Customer, RiskModelInfo, UploadJob
 from app.schemas.schemas import (
@@ -1230,17 +1228,17 @@ def delete_user(user_id: int, actor_user_id: Optional[int] = None) -> tuple[bool
             {"approved_by": None},
             synchronize_session=False,
         )
-        db.query(LoanClassificationDB).filter(LoanClassificationDB.classified_by == user_id).update(
-            {"classified_by": None},
-            synchronize_session=False,
+        db.execute(
+            text("UPDATE Loan_Classification SET classified_by = NULL WHERE classified_by = :user_id"),
+            {"user_id": user_id},
         )
-        db.query(ProvisionAllocationDB).filter(ProvisionAllocationDB.allocated_by == user_id).update(
-            {"allocated_by": None},
-            synchronize_session=False,
+        db.execute(
+            text("UPDATE Provision_Allocation SET allocated_by = NULL WHERE allocated_by = :user_id"),
+            {"user_id": user_id},
         )
-        db.query(LoanApprovalDB).filter(LoanApprovalDB.approved_by == user_id).update(
-            {"approved_by": None},
-            synchronize_session=False,
+        db.execute(
+            text("UPDATE Loan_Approval SET approved_by = NULL WHERE approved_by = :user_id"),
+            {"user_id": user_id},
         )
 
         # Remove rows that require this user_id (non-null foreign keys).
