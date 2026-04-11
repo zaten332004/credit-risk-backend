@@ -141,6 +141,7 @@ class PendingAccountStatusResponse(BaseModel):
     role: str
     status: str
     has_pin: bool
+    rejection_reason: Optional[str] = None
 
 
 class MessageResponse(BaseModel):

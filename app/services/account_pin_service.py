@@ -40,12 +40,14 @@ def get_pending_account_status(db: Session, user_id: int) -> dict:
     if not user:
         raise ValueError("User not found")
 
+    reason = (user.rejection_reason or "").strip()
     return {
         "user_id": int(user.user_id),
         "email": str(user.email or ""),
         "role": _resolve_pending_role(db, user),
         "status": str((user.status or "pending")).strip().lower() or "pending",
         "has_pin": bool((user.pin_hash or "").strip()),
+        "rejection_reason": reason or None,
     }
 
 
