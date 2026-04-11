@@ -1,8 +1,50 @@
 from datetime import date, datetime
+import re
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, validator
+
+
+EMAIL_REGEX = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+PHONE_REGEX = re.compile(r"^0\d{9}$")
+PIN_REGEX = re.compile(r"^\d{6}$")
+
+
+def _validate_email_format(value: str) -> str:
+    candidate = (value or "").strip()
+    if not EMAIL_REGEX.match(candidate):
+        raise ValueError("Invalid email format")
+    return candidate
+
+
+def _validate_phone_format(value: str) -> str:
+    candidate = (value or "").strip()
+    if not PHONE_REGEX.match(candidate):
+        raise ValueError("Phone number must start with 0 and contain exactly 10 digits")
+    return candidate
+
+
+def _validate_password_strength(value: str) -> str:
+    candidate = value or ""
+    if len(candidate) < 6:
+        raise ValueError("Password must be at least 6 characters")
+    if not re.search(r"[A-Z]", candidate):
+        raise ValueError("Password must contain at least one uppercase letter")
+    if not re.search(r"[a-z]", candidate):
+        raise ValueError("Password must contain at least one lowercase letter")
+    if not re.search(r"\d", candidate):
+        raise ValueError("Password must contain at least one number")
+    if not re.search(r"[^A-Za-z0-9]", candidate):
+        raise ValueError("Password must contain at least one special character")
+    return candidate
+
+
+def _validate_pin_digits(value: str) -> str:
+    candidate = (value or "").strip()
+    if not PIN_REGEX.match(candidate):
+        raise ValueError("PIN must contain exactly 6 digits")
+    return candidate
 
 
 # ============================================================================
@@ -40,25 +82,57 @@ class LoginRequest(BaseModel):
 class PasswordResetRequestBody(BaseModel):
     email: str = Field(..., description="Email address")
 
+    @validator("email")
+    def validate_email(cls, v: str) -> str:
+        return _validate_email_format(v)
+
 
 class PasswordResetConfirmBody(BaseModel):
     email: str = Field(..., description="Email address")
-    code: str = Field(..., min_length=4, max_length=10, description="Verification code")
+    code: str = Field(..., min_length=6, max_length=6, description="6-digit PIN")
     new_password: str = Field(..., min_length=6, description="New password")
+
+    @validator("email")
+    def validate_email(cls, v: str) -> str:
+        return _validate_email_format(v)
+
+    @validator("code")
+    def validate_code(cls, v: str) -> str:
+        return _validate_pin_digits(v)
+
+    @validator("new_password")
+    def validate_new_password(cls, v: str) -> str:
+        return _validate_password_strength(v)
 
 
 class AccountPinSetBody(BaseModel):
     pin: str = Field(..., pattern=r"^\d{6}$", description="6-digit PIN")
+
+    @validator("pin")
+    def validate_pin(cls, v: str) -> str:
+        return _validate_pin_digits(v)
 
 
 class AccountPinChangeBody(BaseModel):
     old_pin: str = Field(..., pattern=r"^\d{6}$", description="Current 6-digit PIN")
     new_pin: str = Field(..., pattern=r"^\d{6}$", description="New 6-digit PIN")
 
+    @validator("old_pin", "new_pin")
+    def validate_pin(cls, v: str) -> str:
+        return _validate_pin_digits(v)
+
 
 class AccountPinEmailChangeBody(BaseModel):
     new_email: str = Field(..., description="New email address")
     pin: str = Field(..., pattern=r"^\d{6}$", description="Current 6-digit PIN")
+
+    @validator("new_email")
+    def validate_new_email(cls, v: str) -> str:
+        return _validate_email_format(v)
+
+    @validator("pin")
+    def validate_pin(cls, v: str) -> str:
+        return _validate_pin_digits(v)
 
 
 class PendingAccountStatusResponse(BaseModel):
@@ -113,6 +187,14 @@ class UserCreate(BaseModel):
     password: str
     role_id: int
 
+    @validator("email")
+    def validate_email(cls, v: str) -> str:
+        return _validate_email_format(v)
+
+    @validator("password")
+    def validate_password(cls, v: str) -> str:
+        return _validate_password_strength(v)
+
 
 class UserRead(BaseModel):
     user_id: int
@@ -150,14 +232,31 @@ class ProfileUpdateBody(BaseModel):
     full_name: str | None = Field(None, max_length=100)
     phone: str | None = Field(None, max_length=20)
 
+    @validator("phone", pre=True)
+    def validate_phone(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        candidate = str(v).strip()
+        if candidate == "":
+            return None
+        return _validate_phone_format(candidate)
+
 
 class PasswordChangeBody(BaseModel):
     current_password: str = Field(..., min_length=1)
     new_password: str = Field(..., min_length=6)
 
+    @validator("new_password")
+    def validate_new_password(cls, v: str) -> str:
+        return _validate_password_strength(v)
+
 
 class EmailChangeRequestBody(BaseModel):
     new_email: str = Field(..., description="New email address")
+
+    @validator("new_email")
+    def validate_new_email(cls, v: str) -> str:
+        return _validate_email_format(v)
 
 
 class EmailChangeRequestResponse(BaseModel):
@@ -188,6 +287,23 @@ class UserRegistrationRequest(BaseModel):
     phone: str | None = Field(None, max_length=20)
     registration_type: str = Field(..., description="'analyst' or 'manager'")
 
+    @validator("email")
+    def validate_email(cls, v: str) -> str:
+        return _validate_email_format(v)
+
+    @validator("password")
+    def validate_password(cls, v: str) -> str:
+        return _validate_password_strength(v)
+
+    @validator("phone", pre=True)
+    def validate_phone(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        candidate = str(v).strip()
+        if candidate == "":
+            return None
+        return _validate_phone_format(candidate)
+
 
 class UserRegistrationResponse(BaseModel):
     registration_id: int
@@ -213,6 +329,10 @@ class UserRegistrationApprovalRequest(BaseModel):
 
 class UserRegistrationResendRequest(BaseModel):
     email: str = Field(..., description="Registered email address")
+
+    @validator("email")
+    def validate_email(cls, v: str) -> str:
+        return _validate_email_format(v)
 
 
 class UserRegistrationRead(BaseModel):
