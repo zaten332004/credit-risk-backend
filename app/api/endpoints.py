@@ -807,7 +807,7 @@ async def admin_update_user_status_endpoint(
     is_active: bool,
     current_user: User = Depends(get_current_admin_user),
 ) -> dict:
-    updated = services.set_user_active(user_id, is_active=is_active)
+    updated = services.set_user_active(user_id, is_active=is_active, actor_user_id=current_user.id)
     if not updated:
         raise HTTPException(status_code=404, detail="User not found")
     return {
@@ -824,7 +824,7 @@ async def admin_update_user_role_endpoint(
     body: UserRoleUpdateBody,
     current_user: User = Depends(get_current_admin_user),
 ) -> dict:
-    updated = services.set_user_role(user_id, role=body.role)
+    updated = services.set_user_role(user_id, role=body.role, actor_user_id=current_user.id)
     if not updated:
         raise HTTPException(status_code=404, detail="User or role not found")
     return {
@@ -833,6 +833,21 @@ async def admin_update_user_role_endpoint(
         "role": updated.role,
         "role_id": updated.role_id,
     }
+
+
+@router.delete("/admin/users/{user_id}", response_model=MessageResponse, tags=["admin"])
+async def admin_delete_user_endpoint(
+    user_id: int,
+    current_user: User = Depends(get_current_admin_user),
+) -> MessageResponse:
+    try:
+        deleted, message = services.delete_user(user_id=user_id, actor_user_id=current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=message)
+    return MessageResponse(message=message)
 
 
 @router.get("/admin/audit-logs", response_model=List[AuditLogRead], tags=["admin"])

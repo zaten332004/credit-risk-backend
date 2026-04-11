@@ -1076,7 +1076,7 @@ def create_user(user: UserCreate) -> UserRead:
         db.close()
 
 
-def set_user_active(user_id: int, is_active: bool) -> Optional[UserRead]:
+def set_user_active(user_id: int, is_active: bool, actor_user_id: Optional[int] = None) -> Optional[UserRead]:
     db = SessionLocal()
     try:
         row = db.query(UserDB).filter(UserDB.user_id == user_id).first()
@@ -1088,7 +1088,7 @@ def set_user_active(user_id: int, is_active: bool) -> Optional[UserRead]:
         row.updated_at = _now()
         log_action(
             db,
-            user_id=None,
+            user_id=actor_user_id,
             action="UPDATE_USER_STATUS",
             entity_type="User",
             entity_id=row.user_id,
@@ -1105,7 +1105,7 @@ def set_user_active(user_id: int, is_active: bool) -> Optional[UserRead]:
         db.close()
 
 
-def set_user_role(user_id: int, role: str) -> Optional[UserRead]:
+def set_user_role(user_id: int, role: str, actor_user_id: Optional[int] = None) -> Optional[UserRead]:
     db = SessionLocal()
     try:
         row = db.query(UserDB).filter(UserDB.user_id == user_id).first()
@@ -1141,7 +1141,7 @@ def set_user_role(user_id: int, role: str) -> Optional[UserRead]:
 
         log_action(
             db,
-            user_id=None,
+            user_id=actor_user_id,
             action="UPDATE_USER_ROLE",
             entity_type="User",
             entity_id=row.user_id,
@@ -1155,6 +1155,64 @@ def set_user_role(user_id: int, role: str) -> Optional[UserRead]:
         db.commit()
         db.refresh(row)
         return _to_user_read(row, role_row.role_name)
+    finally:
+        db.close()
+
+
+def delete_user(user_id: int, actor_user_id: Optional[int] = None) -> tuple[bool, str]:
+    db = SessionLocal()
+    try:
+        row = db.query(UserDB).filter(UserDB.user_id == user_id).first()
+        if not row:
+            return False, "User not found"
+
+        if actor_user_id is not None and int(actor_user_id) == int(user_id):
+            raise ValueError("You cannot delete your own account")
+
+        role_rows = db.query(RoleDB).all()
+        admin_role_ids = {
+            int(role.role_id)
+            for role in role_rows
+            if normalize_role_name(getattr(role, "role_name", None)) == "admin"
+        }
+        is_admin_user = normalize_role_name(row.user_type) == "admin" or (
+            row.role_id is not None and int(row.role_id) in admin_role_ids
+        )
+        if is_admin_user:
+            admin_count = (
+                db.query(UserDB)
+                .filter(
+                    or_(
+                        func.lower(func.coalesce(UserDB.user_type, "")) == "admin",
+                        UserDB.role_id.in_(admin_role_ids) if admin_role_ids else literal(False),
+                    )
+                )
+                .count()
+            )
+            if admin_count <= 1:
+                raise ValueError("Cannot delete the last admin account")
+
+        old_value = {
+            "user_id": row.user_id,
+            "username": row.username,
+            "email": row.email,
+            "role_id": row.role_id,
+            "user_type": row.user_type,
+            "status": row.status,
+            "is_email_verified": row.is_email_verified,
+        }
+        db.delete(row)
+        log_action(
+            db,
+            user_id=actor_user_id,
+            action="DELETE_USER",
+            entity_type="User",
+            entity_id=user_id,
+            old_value=old_value,
+            new_value={"deleted": True},
+        )
+        db.commit()
+        return True, "User deleted successfully"
     finally:
         db.close()
 
