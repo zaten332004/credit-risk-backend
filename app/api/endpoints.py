@@ -33,6 +33,7 @@ from app.schemas.schemas import (
     CustomerHistoryItem,
     CustomerRead,
     CustomerSearchBody,
+    CustomerStatusUpdateBody,
     CustomerUpdate,
     ExportRequestBody,
     ExportResponse,
@@ -433,6 +434,23 @@ async def update_customer_endpoint(
     updated = customer_intake_service.update_customer(
         customer_id,
         body,
+        updated_by=current_user.email,
+        updated_by_user_id=current_user.id,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return updated
+
+
+@router.patch("/customers/{customer_id}/status", response_model=CustomerRead, tags=["customers"])
+async def update_customer_status_endpoint(
+    customer_id: int,
+    body: CustomerStatusUpdateBody,
+    current_user: User = Depends(get_current_manager_or_admin_user),  # Chỉ Manager/Admin
+) -> CustomerRead:
+    updated = customer_intake_service.update_customer(
+        customer_id,
+        CustomerUpdate(application_status=body.application_status, notes=body.rejection_reason),
         updated_by=current_user.email,
         updated_by_user_id=current_user.id,
     )
