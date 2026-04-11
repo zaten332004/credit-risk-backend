@@ -520,6 +520,17 @@ class CustomerUpdate(BaseModel):
     notes: Optional[str] = None
 
 
+class CustomerStatusUpdateBody(BaseModel):
+    application_status: str
+
+    @validator("application_status")
+    def application_status_valid(cls, v):
+        normalized = str(v or "").strip().lower()
+        if normalized not in {"pending", "approved", "rejected", "disbursed"}:
+            raise ValueError("application_status must be one of: pending, approved, rejected, disbursed")
+        return normalized
+
+
 class CustomerRead(BaseModel):
     customer_id: int
     full_name: str

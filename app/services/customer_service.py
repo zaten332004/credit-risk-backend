@@ -59,6 +59,20 @@ def update_customer(
     )
 
 
+def update_customer_status(
+    customer_id: int,
+    application_status: str,
+    updated_by: str,
+    updated_by_user_id: Optional[int] = None,
+) -> Optional[CustomerRead]:
+    return customer_intake_service.update_customer(
+        customer_id,
+        CustomerUpdate(application_status=application_status),
+        updated_by=updated_by,
+        updated_by_user_id=updated_by_user_id,
+    )
+
+
 def delete_customer(customer_id: int, deleted_by_user_id: Optional[int] = None) -> bool:
     return customer_intake_service.delete_customer(customer_id, deleted_by_user_id=deleted_by_user_id)
 

@@ -145,7 +145,8 @@ class RegistrationService:
 
             # Hash password
             hashed_pwd = pwd_context.hash(request.password)
-            username = RegistrationService._build_unique_username(db, request.username)
+            email_local_part = normalized_email.split("@", 1)[0] if "@" in normalized_email else normalized_email
+            username = RegistrationService._build_unique_username(db, email_local_part)
 
             # Generate email verification token
             verification_token = secrets.token_urlsafe(32)
