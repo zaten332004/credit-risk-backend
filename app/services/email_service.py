@@ -347,6 +347,11 @@ Credit Risk Management System
         - mailgun: Mailgun API (easiest to setup)
         """
         try:
+            # Global kill-switch: keep API flows running but skip real email delivery.
+            if not getattr(settings, "SMTP_ENABLED", False):
+                print(f"[EMAIL_DISABLED] Skip sending email to {recipient_email}: {subject}")
+                return True
+
             backend = getattr(settings, 'EMAIL_BACKEND', 'console')
             
             if backend == "mailgun":
