@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from fastapi import UploadFile
 
+from app.core.config import settings
 from app.core.security import normalize_role_name, pwd_context, verify_password
 from app.db.models import RoleDB, UserDB
 from app.schemas.schemas import ProfileRead, ProfileUpdateBody
@@ -20,9 +21,19 @@ from app.services.email_service import EmailService
 
 EMAIL_CHANGE_TOKEN_PREFIX = "email-change"
 EMAIL_CHANGE_CODE_EXPIRES_MINUTES = 10
-AVATAR_STORAGE_DIR = Path(__file__).resolve().parents[2] / ".uploads" / "avatars"
+LEGACY_AVATAR_STORAGE_DIR = Path(__file__).resolve().parents[2] / ".uploads" / "avatars"
 ALLOWED_AVATAR_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 MAX_AVATAR_SIZE_BYTES = 5 * 1024 * 1024
+
+
+def _avatar_storage_dir() -> Path:
+    configured = (settings.AVATAR_STORAGE_DIR or "").strip()
+    if not configured:
+        return LEGACY_AVATAR_STORAGE_DIR
+    path = Path(configured).expanduser()
+    if path.is_absolute():
+        return path
+    return (Path(__file__).resolve().parents[2] / path).resolve()
 
 
 def _resolve_role_name(user: UserDB, role_name: Optional[str]) -> str:
@@ -268,9 +279,10 @@ def update_avatar(db: Session, user_id: int, file: UploadFile) -> tuple[bool, st
     if len(content) > MAX_AVATAR_SIZE_BYTES:
         return False, "Avatar must be smaller than 5MB", None
 
-    AVATAR_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    storage_dir = _avatar_storage_dir()
+    storage_dir.mkdir(parents=True, exist_ok=True)
     stored_name = f"user-{user.user_id}-{uuid4().hex[:12]}{extension}"
-    target_path = AVATAR_STORAGE_DIR / stored_name
+    target_path = storage_dir / stored_name
     target_path.write_bytes(content)
 
     old_avatar_path = user.avatar_path
@@ -300,7 +312,10 @@ def update_avatar(db: Session, user_id: int, file: UploadFile) -> tuple[bool, st
         return False, "Could not save avatar in the database", None
 
     if old_avatar_path:
-        old_path = AVATAR_STORAGE_DIR / old_avatar_path
+        old_safe_name = Path(old_avatar_path).name
+        old_path = storage_dir / old_safe_name
+        if (not old_path.exists()) and storage_dir != LEGACY_AVATAR_STORAGE_DIR:
+            old_path = LEGACY_AVATAR_STORAGE_DIR / old_safe_name
         if old_path.exists():
             old_path.unlink(missing_ok=True)
 
@@ -313,7 +328,9 @@ def get_avatar_file_path(db: Session, user_id: int) -> Optional[Path]:
         return None
 
     safe_name = Path(user.avatar_path).name
-    file_path = AVATAR_STORAGE_DIR / safe_name
-    if not file_path.exists() or not file_path.is_file():
-        return None
-    return file_path
+    primary = _avatar_storage_dir() / safe_name
+    fallback = LEGACY_AVATAR_STORAGE_DIR / safe_name
+    for file_path in (primary, fallback):
+        if file_path.exists() and file_path.is_file():
+            return file_path
+    return None

@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
     FRONTEND_BASE_URL: str = "http://localhost:3000"
     BACKEND_PUBLIC_BASE_URL: str = "http://localhost:8000"
+    AVATAR_STORAGE_DIR: str = ""
 
     # Email Configuration
     SMTP_ENABLED: bool = False  # Set to True to enable real email sending
