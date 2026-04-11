@@ -296,10 +296,6 @@ class RegistrationService:
                 return False, f"User already {user.status}"
 
             if action.lower() == "approve":
-                # Check if email is verified
-                if not user.is_email_verified:
-                    return False, "Email must be verified before approval"
-
                 old_state = {
                     "status": user.status,
                     "role_id": user.role_id,
