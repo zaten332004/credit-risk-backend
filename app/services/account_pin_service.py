@@ -25,6 +25,16 @@ def _resolve_role_name(db: Session, role_id: Optional[int]) -> str:
     return normalize_role_name(role.role_name if role else "viewer")
 
 
+def _resolve_pending_role(db: Session, user: UserDB) -> str:
+    if user.role_id is not None:
+        return _resolve_role_name(db, user.role_id)
+
+    requested_type = (user.user_type or "").strip().lower()
+    if requested_type in {"analyst", "manager", "admin", "viewer"}:
+        return requested_type
+    return "viewer"
+
+
 def get_pending_account_status(db: Session, user_id: int) -> dict:
     user = db.query(UserDB).filter(UserDB.user_id == user_id).first()
     if not user:
@@ -33,7 +43,7 @@ def get_pending_account_status(db: Session, user_id: int) -> dict:
     return {
         "user_id": int(user.user_id),
         "email": str(user.email or ""),
-        "role": _resolve_role_name(db, user.role_id),
+        "role": _resolve_pending_role(db, user),
         "status": str((user.status or "pending")).strip().lower() or "pending",
         "has_pin": bool((user.pin_hash or "").strip()),
     }
