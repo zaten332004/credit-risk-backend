@@ -123,8 +123,25 @@ class RegistrationService:
                 return False, "Email already exists", None
 
             # Validate registration type
-            if request.registration_type.lower() not in ["analyst", "manager"]:
+            requested_type = (request.registration_type or "").strip().lower()
+            if requested_type not in ["analyst", "manager"]:
                 return False, "Registration type must be 'analyst' or 'manager'", None
+
+            # Assign role immediately at registration time (still pending approval)
+            if requested_type == "manager":
+                selected_role = (
+                    db.query(RoleDB)
+                    .filter(RoleDB.role_name.in_(["manager", "Manager"]))
+                    .first()
+                )
+            else:
+                selected_role = (
+                    db.query(RoleDB)
+                    .filter(RoleDB.role_name.in_(["risk analyst", "Risk Analyst", "analyst", "Analyst"]))
+                    .first()
+                )
+            if not selected_role:
+                return False, f"Role mapping not found for registration type '{requested_type}'", None
 
             # Hash password
             hashed_pwd = pwd_context.hash(request.password)
@@ -145,11 +162,11 @@ class RegistrationService:
                 password_hash=hashed_pwd,
                 full_name=request.full_name,
                 phone=request.phone,
-                user_type=request.registration_type.lower(),
+                user_type=requested_type,
                 status=initial_status,
                 verification_token=verification_token,
                 verification_sent_at=datetime.utcnow(),
-                role_id=None,  # Will be assigned after approval
+                role_id=selected_role.role_id,
             )
 
             db.add(user)
@@ -165,6 +182,7 @@ class RegistrationService:
                     "email": user.email,
                     "user_type": user.user_type,
                     "status": user.status,
+                    "role_id": user.role_id,
                 },
             )
             db.commit()
@@ -193,7 +211,7 @@ class RegistrationService:
                 created_at=user.created_at,
                 message=f"Registration successful! Verification email sent to {user.email}. "
                         f"Please click the link in the email to verify your account. "
-                        f"For manager registration, admin approval will be required after email verification."
+                        f"Admin approval will be required after email verification."
             )
 
             return True, "Registration successful", response
