@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+import logging
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
 from app.db.models import AuditLogDB
+
+logger = logging.getLogger(__name__)
 from app.schemas.schemas import AuditLogRead
 
 
@@ -57,3 +60,34 @@ def to_audit_log_read(row: AuditLogDB, actor_name: Optional[str] = None) -> Audi
         new_value=row.new_value,
         performed_at=row.performed_at,
     )
+
+
+def cleanup_expired_audit_logs() -> int:
+    """
+    Xóa các dòng Audit_Log có performed_at trước ngưỡng AUDIT_LOG_RETENTION_DAYS (UTC).
+    Trả về số bản ghi đã xóa. AUDIT_LOG_RETENTION_DAYS <= 0 thì không xóa.
+    """
+    from app.core.config import settings
+
+    days = float(getattr(settings, "AUDIT_LOG_RETENTION_DAYS", 0) or 0)
+    if days <= 0:
+        return 0
+
+    from app.db.session import SessionLocal
+
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    db = SessionLocal()
+    try:
+        deleted = (
+            db.query(AuditLogDB)
+            .filter(AuditLogDB.performed_at < cutoff)
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        return int(deleted or 0)
+    except Exception:
+        db.rollback()
+        logger.exception("Audit log retention delete failed")
+        raise
+    finally:
+        db.close()

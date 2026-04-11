@@ -10,6 +10,14 @@ class Settings(BaseSettings):
     # Absolute path for customer CSV upload job files ({job_id}.json + data file). Empty = repo-root `.ai_chat_uploads`.
     # Use a persistent/shared volume when running multiple API replicas (otherwise GET /jobs/{id}/content may 404 on another instance).
     UPLOAD_JOBS_STORAGE_DIR: str = ""
+    # Delete upload job files on disk after this many hours (metadata `created_at`, else .json mtime). 0 = never delete automatically.
+    UPLOAD_JOBS_RETENTION_HOURS: float = 168.0
+    # How often the upload-dir sweeper runs (minutes): expired jobs (if retention on) + invalid/orphan files. 0 = no periodic sweep (startup sweep still runs once).
+    UPLOAD_JOBS_CLEANUP_INTERVAL_MINUTES: int = 60
+
+    # Audit_Log rows: delete when performed_at is older than this many days. 0 = keep forever (no auto-delete).
+    AUDIT_LOG_RETENTION_DAYS: float = 7.0
+    AUDIT_LOG_CLEANUP_INTERVAL_MINUTES: int = 60
 
     # Email Configuration
     SMTP_ENABLED: bool = False  # Set to True to enable real email sending

@@ -839,6 +839,44 @@ def get_customer_focus_context(session: Session, customer_id: int) -> str:
     return "\n".join(lines)
 
 
+def get_customers_focus_context(session: Session, customer_ids: List[int], *, max_customers: int = 40) -> str:
+    """
+    Nhiều khách hàng cho AI chat: ghép snapshot từng khách (giới hạn độ dài prompt).
+    """
+    seen: set[int] = set()
+    ids: List[int] = []
+    for raw in customer_ids or []:
+        cid = _safe_int(raw)
+        if cid is None or cid <= 0 or cid in seen:
+            continue
+        seen.add(cid)
+        ids.append(cid)
+
+    if not ids:
+        return "Không có mã khách hàng hợp lệ."
+
+    original_count = len(ids)
+    if len(ids) > max_customers:
+        ids = ids[:max_customers]
+
+    blocks: List[str] = []
+    for cid in ids:
+        blocks.append(get_customer_focus_context(session, cid))
+
+    footer: List[str] = []
+    if original_count > max_customers:
+        footer.append(
+            f"(Giới hạn AI: chỉ nạp {max_customers}/{original_count} khách hàng đầu tiên trong danh sách đã chọn.)"
+        )
+    elif len(ids) > 1:
+        footer.append(f"(Tổng {len(ids)} khách hàng được đưa vào ngữ cảnh.)")
+
+    out = "\n\n".join(blocks)
+    if footer:
+        out = out + "\n\n" + "\n".join(footer)
+    return out
+
+
 def get_analysis_context_powerbi(runtime_user: Optional[Any] = None) -> str:
     """
     Collect context directly from Power BI (via REST API + service principal).

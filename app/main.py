@@ -1,4 +1,7 @@
+import asyncio
+import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -14,7 +17,73 @@ from app.api.routers.powerbi import router as powerbi_router
 # from app.api.routers import upload, analysis  # TODO: Fix imports
 from app.core.config import settings
 
-app = FastAPI(title=settings.PROJECT_NAME)
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from app.services.audit_service import cleanup_expired_audit_logs
+    from app.services.services import cleanup_expired_upload_jobs, cleanup_invalid_upload_jobs
+
+    tasks: list[asyncio.Task[None]] = []
+
+    try:
+        n_inv = cleanup_invalid_upload_jobs()
+        if n_inv:
+            logger.info("Startup: removed %s invalid/orphan upload job file(s)", n_inv)
+        n_exp = cleanup_expired_upload_jobs()
+        if n_exp:
+            logger.info("Startup: removed %s expired upload job file(s)", n_exp)
+    except Exception:
+        logger.exception("Upload job storage cleanup at startup failed")
+
+    interval_min = int(getattr(settings, "UPLOAD_JOBS_CLEANUP_INTERVAL_MINUTES", 60) or 60)
+    if interval_min > 0:
+        interval_sec = max(1, interval_min) * 60
+
+        async def _upload_jobs_cleanup_loop() -> None:
+            while True:
+                try:
+                    n_exp = cleanup_expired_upload_jobs()
+                    if n_exp:
+                        logger.info("Removed %s expired upload job file(s)", n_exp)
+                    n_inv = cleanup_invalid_upload_jobs()
+                    if n_inv:
+                        logger.info("Removed %s invalid/orphan upload job file(s)", n_inv)
+                except Exception:
+                    logger.exception("Upload job storage cleanup failed")
+                await asyncio.sleep(interval_sec)
+
+        tasks.append(asyncio.create_task(_upload_jobs_cleanup_loop()))
+
+    audit_days = float(getattr(settings, "AUDIT_LOG_RETENTION_DAYS", 0) or 0)
+    if audit_days > 0:
+        audit_interval_min = max(1, int(getattr(settings, "AUDIT_LOG_CLEANUP_INTERVAL_MINUTES", 60) or 60))
+        audit_interval_sec = audit_interval_min * 60
+
+        async def _audit_log_cleanup_loop() -> None:
+            while True:
+                try:
+                    n = cleanup_expired_audit_logs()
+                    if n:
+                        logger.info("Removed %s audit log row(s) past retention", n)
+                except Exception:
+                    logger.exception("Audit log retention cleanup failed")
+                await asyncio.sleep(audit_interval_sec)
+
+        tasks.append(asyncio.create_task(_audit_log_cleanup_loop()))
+
+    yield
+
+    for task in tasks:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
 
 # CORS for frontend apps (React/Vite/etc.)
 default_origins = [

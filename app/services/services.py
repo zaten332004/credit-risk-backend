@@ -4,6 +4,7 @@ import csv
 import json
 import logging
 import statistics
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -107,6 +108,147 @@ def _resolve_uploaded_file_path(job_id: str, file_name: str) -> Optional[Path]:
             continue
         return p
     return None
+
+
+def _upload_jobs_retention_seconds() -> Optional[float]:
+    """None when automatic expiry cleanup is disabled."""
+    try:
+        from app.core.config import settings
+
+        hours = float(getattr(settings, "UPLOAD_JOBS_RETENTION_HOURS", 0) or 0)
+    except Exception:
+        hours = 0.0
+    if hours <= 0:
+        return None
+    return hours * 3600.0
+
+
+def _upload_job_artifact_age_seconds(meta_path: Path) -> float:
+    """Seconds since upload job was created (meta `created_at`, else file mtime)."""
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        if isinstance(meta, dict):
+            raw = meta.get("created_at")
+            if raw:
+                s = str(raw).strip().replace("Z", "+00:00")
+                dt = datetime.fromisoformat(s)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=UTC)
+                return max(0.0, (datetime.now(UTC) - dt).total_seconds())
+    except Exception:
+        pass
+    try:
+        return max(0.0, time.time() - meta_path.stat().st_mtime)
+    except OSError:
+        return 0.0
+
+
+def _remove_upload_job_artifacts(job_id: str) -> int:
+    """Delete `{job_id}.*` under upload storage and drop in-process caches. Returns number of paths unlinked."""
+    base = _upload_jobs_storage_dir()
+    removed = 0
+    if not base.is_dir():
+        _upload_job_contents.pop(job_id, None)
+        _upload_jobs.pop(job_id, None)
+        return 0
+    for p in list(base.glob(f"{job_id}.*")):
+        if not p.is_file():
+            continue
+        try:
+            p.unlink()
+            removed += 1
+        except OSError:
+            logger.warning("Could not delete upload artifact %s", p, exc_info=False)
+    _upload_job_contents.pop(job_id, None)
+    _upload_jobs.pop(job_id, None)
+    return removed
+
+
+def cleanup_expired_upload_jobs() -> int:
+    """Remove upload job files older than UPLOAD_JOBS_RETENTION_HOURS. Returns number of files deleted."""
+    max_age = _upload_jobs_retention_seconds()
+    if max_age is None:
+        return 0
+    base = _upload_jobs_storage_dir()
+    if not base.is_dir():
+        return 0
+    deleted = 0
+    for meta_path in base.glob("*.json"):
+        if not meta_path.is_file():
+            continue
+        job_id = meta_path.stem
+        try:
+            if _upload_job_artifact_age_seconds(meta_path) <= max_age:
+                continue
+            deleted += _remove_upload_job_artifacts(job_id)
+        except Exception:
+            logger.exception("Upload job cleanup failed for %s", job_id)
+    return deleted
+
+
+def cleanup_invalid_upload_jobs() -> int:
+    """
+    Remove inconsistent upload artifacts under UPLOAD_JOBS_STORAGE_DIR:
+    - `.json` meta that is unreadable, missing file_name, or has no matching data file on disk
+    - data files `{stem}.*` (non-.json) with no `{stem}.json` (orphans after redeploy / manual deletes)
+
+    Returns number of files unlinked.
+    """
+    base = _upload_jobs_storage_dir()
+    if not base.is_dir():
+        return 0
+    removed = 0
+
+    for meta_path in list(base.glob("*.json")):
+        if not meta_path.is_file():
+            continue
+        job_id = meta_path.stem
+        valid = False
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if isinstance(meta, dict):
+                fn = str(meta.get("file_name") or "").strip()
+                if fn and _resolve_uploaded_file_path(job_id, fn) is not None:
+                    valid = True
+        except Exception:
+            valid = False
+        if not valid:
+            removed += _remove_upload_job_artifacts(job_id)
+
+    stems_with_meta = {p.stem for p in base.glob("*.json") if p.is_file()}
+    for p in list(base.iterdir()):
+        if not p.is_file():
+            continue
+        if p.suffix.lower() == ".json":
+            continue
+        if p.stem in stems_with_meta:
+            continue
+        try:
+            p.unlink()
+            removed += 1
+            _upload_job_contents.pop(p.stem, None)
+            _upload_jobs.pop(p.stem, None)
+        except OSError:
+            logger.warning("Could not delete orphan upload file %s", p, exc_info=False)
+
+    return removed
+
+
+def _expire_upload_job_if_stale(job_id: str, meta_path: Path) -> bool:
+    """If job artifacts exceed retention, delete them and return True (caller should treat as missing)."""
+    max_age = _upload_jobs_retention_seconds()
+    if max_age is None:
+        return False
+    try:
+        if not meta_path.is_file():
+            return False
+        if _upload_job_artifact_age_seconds(meta_path) <= max_age:
+            return False
+        _remove_upload_job_artifacts(job_id)
+        return True
+    except Exception:
+        logger.exception("Failed to expire upload job %s", job_id)
+        return False
 _alert_subscriptions: List[AlertSubscriptionRead] = []
 
 _id_counters: Dict[str, int] = {"customer": 0, "alert": 0, "subscription": 0}
@@ -1613,17 +1755,32 @@ def persist_upload_job_file(job_id: str, filename: str, content: bytes) -> None:
     file_path = base / f"{job_id}{ext}"
     meta_path = base / f"{job_id}.json"
     file_path.write_bytes(content)
-    meta_path.write_text(json.dumps({"file_name": filename or f"{job_id}{ext}"}, ensure_ascii=False), encoding="utf-8")
+    meta_path.write_text(
+        json.dumps(
+            {
+                "file_name": filename or f"{job_id}{ext}",
+                "created_at": datetime.now(UTC).isoformat(),
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
 
 def get_upload_job_content(job_id: str) -> Optional[Dict[str, Any]]:
+    meta_path = _upload_jobs_storage_dir() / f"{job_id}.json"
+    if meta_path.is_file():
+        if _expire_upload_job_if_stale(job_id, meta_path):
+            return None
+    else:
+        _upload_job_contents.pop(job_id, None)
+
     cached = _upload_job_contents.get(job_id)
     if cached is not None:
         normalized = _normalize_upload_payload(cached)
         _upload_job_contents[job_id] = normalized
         return normalized
 
-    meta_path = _upload_jobs_storage_dir() / f"{job_id}.json"
     if not meta_path.exists():
         logger.warning("Upload job %s: missing meta file %s", job_id, meta_path)
         return None

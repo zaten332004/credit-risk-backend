@@ -13,6 +13,7 @@ import logging
 import math
 import os
 import re
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -26,6 +27,7 @@ from app.services.analytics_data_service import (
     get_analysis_context,
     get_analysis_context_powerbi,
     get_customer_focus_context,
+    get_customers_focus_context,
 )
 from app.services.bank_faq_service import BankFAQService
 from app.services.chat_session_metadata import (
@@ -203,6 +205,33 @@ def _customer_id_from_context(customer_context: Optional[Dict]) -> Optional[int]
     return None
 
 
+def _customer_ids_from_context(customer_context: Optional[Dict]) -> List[int]:
+    """Ưu tiên mảng customer_ids; không có thì dùng một customer_id."""
+    if not isinstance(customer_context, dict):
+        return []
+    raw = customer_context.get("customer_ids") or customer_context.get("customerIds")
+    out: List[int] = []
+    if isinstance(raw, list):
+        for item in raw:
+            try:
+                n = int(item)
+                if n > 0:
+                    out.append(n)
+            except (TypeError, ValueError):
+                continue
+    seen: set[int] = set()
+    uniq: List[int] = []
+    for n in out:
+        if n in seen:
+            continue
+        seen.add(n)
+        uniq.append(n)
+    if uniq:
+        return uniq
+    single = _customer_id_from_context(customer_context)
+    return [single] if single else []
+
+
 def _sanitize_system_context(raw_context: str, source: str) -> str:
     text = (raw_context or "").strip()
     if not text:
@@ -301,6 +330,8 @@ def _extract_additional_customer_context(customer_context: Optional[Dict]) -> st
             "aiDataSource",
             "customer_id",
             "customerId",
+            "customer_ids",
+            "customerIds",
             "focus_customer_id",
             "focusCustomerId",
         }
@@ -404,6 +435,9 @@ class GeminiAIChatService:
         "- Neu co su khac biet giua quy tac nghiep vu do nguoi dung cung cap va du lieu thuc te, hay neu ro gia dinh dang duoc ap dung trong phan tich.\n\n"
         "Nguyen tac trinh bay:\n"
         "- Tra loi bang tieng Viet tu nhien, ro rang, de doc.\n"
+        "- Bat buoc viet day du dau thanh tieng Viet (a/ă/â, e/ê, o/ô/ơ, u/ư, d/d) va dau cau hop ly (.,;:?!…). "
+        "Phan huong dan he thong phia tren co the viet khong dau de giam do dai; ban KHONG duoc bat chuoc kieu khong dau "
+        "khi tra loi nguoi dung.\n"
         "- Duoc phep dung tieu de ngan, danh sach, bang tom tat ngat doan hop ly khi giup de hieu hon.\n"
         "- Co the dung giong van chuyen nghiep nhung khong quan lieu, khong lan man.\n"
         "- Khong lap lai cac cau mo dau may moc nhu 'Chao ban' o moi lan tra loi, tru khi thuc su can thiet cho ngu canh.\n"
@@ -561,13 +595,19 @@ class GeminiAIChatService:
                     data_context = ""
                     context_source = ""
                 elif ai_src == "customer":
-                    cid = _customer_id_from_context(customer_context)
+                    cids = _customer_ids_from_context(customer_context)
                     try:
-                        if cid:
-                            data_context = _sanitize_system_context(
-                                get_customer_focus_context(session, cid),
-                                "db",
-                            )
+                        if cids:
+                            if len(cids) == 1:
+                                data_context = _sanitize_system_context(
+                                    get_customer_focus_context(session, cids[0]),
+                                    "db",
+                                )
+                            else:
+                                data_context = _sanitize_system_context(
+                                    get_customers_focus_context(session, cids),
+                                    "db",
+                                )
                         else:
                             data_context = _sanitize_system_context(get_analysis_context(session), "db")
                         context_source = "db"
@@ -707,7 +747,7 @@ class GeminiAIChatService:
                 )
             if data_hints:
                 user_text = (
-                    "[HUONG DAN NOI BO — KHONG DOC NGUYEN VAN CHO NGUOI DUNG]\n"
+                    "[HƯỚNG DẪN NỘI BỘ — KHÔNG ĐỌC NGUYÊN VĂN CHO NGƯỜI DÙNG]\n"
                     + "\n".join(f"- {h}" for h in data_hints)
                     + "\n\n"
                     + user_text
@@ -738,6 +778,8 @@ class GeminiAIChatService:
                 raise
 
             ai_text = _dedupe_response_text(_extract_text(resp))
+            if ai_text:
+                ai_text = unicodedata.normalize("NFC", ai_text)
             if not ai_text:
                 ai_text = "Minh chua nhan duoc noi dung tra loi tu mo hinh. Ban thu lai giup minh nhe."
 
