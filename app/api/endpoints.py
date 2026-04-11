@@ -3,7 +3,7 @@ from io import StringIO
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.security import OAuth2PasswordRequestForm
 
 from app.core.security import (
@@ -377,7 +377,7 @@ async def get_my_avatar(
 ):
     file_path = profile_service.get_avatar_file_path(db, current_user.id)
     if not file_path:
-        raise HTTPException(status_code=404, detail="Avatar not found")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     return FileResponse(path=file_path)
 
 
