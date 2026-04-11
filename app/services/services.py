@@ -17,8 +17,13 @@ from app.db.models import (
     AlertDB,
     AlertSubscriptionDB,
     AuditLogDB,
+    ChatHistoryDB,
+    ChatSessionDB,
+    ChatSessionPinDB,
     CustomerDB,
     LoanApplicationDB,
+    ManagerUpgradeRequestDB,
+    ManagerUpgradeVoteDB,
     RiskPredictionDB,
     RoleDB,
     UserDB,
@@ -1201,6 +1206,52 @@ def delete_user(user_id: int, actor_user_id: Optional[int] = None) -> tuple[bool
             "status": row.status,
             "is_email_verified": row.is_email_verified,
         }
+
+        # Detach nullable references first to avoid FK violations.
+        db.query(AuditLogDB).filter(AuditLogDB.user_id == user_id).update(
+            {"user_id": None},
+            synchronize_session=False,
+        )
+        db.query(UserDB).filter(UserDB.approved_by == user_id).update(
+            {"approved_by": None},
+            synchronize_session=False,
+        )
+        db.query(CustomerDB).filter(CustomerDB.user_id == user_id).update(
+            {"user_id": None},
+            synchronize_session=False,
+        )
+        db.query(ManagerUpgradeRequestDB).filter(ManagerUpgradeRequestDB.nominated_by == user_id).update(
+            {"nominated_by": None},
+            synchronize_session=False,
+        )
+        db.query(ManagerUpgradeRequestDB).filter(ManagerUpgradeRequestDB.approved_by == user_id).update(
+            {"approved_by": None},
+            synchronize_session=False,
+        )
+
+        # Remove rows that require this user_id (non-null foreign keys).
+        db.query(AlertSubscriptionDB).filter(AlertSubscriptionDB.user_id == user_id).delete(synchronize_session=False)
+        db.query(ChatSessionPinDB).filter(ChatSessionPinDB.user_id == user_id).delete(synchronize_session=False)
+        db.query(ManagerUpgradeVoteDB).filter(ManagerUpgradeVoteDB.manager_user_id == user_id).delete(
+            synchronize_session=False
+        )
+        db.query(ChatHistoryDB).filter(ChatHistoryDB.user_id == user_id).delete(synchronize_session=False)
+        db.query(ChatSessionDB).filter(ChatSessionDB.user_id == user_id).delete(synchronize_session=False)
+
+        target_request_ids = [
+            int(request_id)
+            for (request_id,) in db.query(ManagerUpgradeRequestDB.request_id)
+            .filter(ManagerUpgradeRequestDB.target_user_id == user_id)
+            .all()
+        ]
+        if target_request_ids:
+            db.query(ManagerUpgradeVoteDB).filter(ManagerUpgradeVoteDB.request_id.in_(target_request_ids)).delete(
+                synchronize_session=False
+            )
+            db.query(ManagerUpgradeRequestDB).filter(ManagerUpgradeRequestDB.request_id.in_(target_request_ids)).delete(
+                synchronize_session=False
+            )
+
         db.delete(row)
         log_action(
             db,
@@ -1213,6 +1264,12 @@ def delete_user(user_id: int, actor_user_id: Optional[int] = None) -> tuple[bool
         )
         db.commit()
         return True, "User deleted successfully"
+    except ValueError:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise ValueError("Could not delete user because related data still exists") from exc
     finally:
         db.close()
 
