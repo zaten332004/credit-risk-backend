@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import case, desc, func, literal, or_, text
+from sqlalchemy import case, desc, func, inspect, literal, or_, text
 from sqlalchemy.orm import aliased
 
 from app.core.security import normalize_role_name, pwd_context
@@ -20,7 +20,6 @@ from app.db.models import (
     AuditLogDB,
     ChatHistoryDB,
     ChatSessionDB,
-    ChatSessionPinDB,
     CustomerDB,
     LoanApplicationDB,
     ManagerUpgradeRequestDB,
@@ -1407,20 +1406,60 @@ def _is_missing_db_object_error(exc: BaseException) -> bool:
         return True
     if "invalid object name" in msg:
         return True
+    if "base table or view not found" in msg:
+        return True
     orig = getattr(exc, "orig", None)
     if orig is not None and orig is not exc:
         return _is_missing_db_object_error(orig)
     return False
 
 
-def _execute_optional_user_fk_sql(db, stmt: str, params: dict[str, Any]) -> None:
+def _physical_table_name(db, logical_name: str) -> Optional[str]:
+    """Return actual table name as stored in the DB (case-insensitive match)."""
     try:
-        db.execute(text(stmt), params)
-    except Exception as exc:
-        if _is_missing_db_object_error(exc):
-            logger.debug("Skipping optional user-delete FK cleanup: %s (%s)", stmt.strip().split()[1], exc)
-            return
-        raise
+        insp = inspect(db.bind)
+        dialect = insp.bind.dialect.name
+        names: list[str] = []
+        if dialect == "mssql":
+            try:
+                names = list(insp.get_table_names(schema="dbo"))
+            except Exception:
+                names = list(insp.get_table_names())
+        else:
+            names = list(insp.get_table_names())
+    except Exception:
+        return None
+    want = logical_name.lower()
+    for n in names:
+        if n.lower() == want:
+            return n
+    return None
+
+
+def _quoted_table_ident(dialect_name: str, physical_name: str) -> str:
+    if dialect_name == "mssql":
+        return f"[{physical_name}]"
+    if dialect_name in ("mysql", "mariadb"):
+        return f"`{physical_name}`"
+    return f'"{physical_name}"'
+
+
+def _run_resolved_user_fk_update(db, logical_table: str, set_and_where: str, params: dict[str, Any]) -> None:
+    phys = _physical_table_name(db, logical_table)
+    if not phys:
+        return
+    dialect = db.bind.dialect.name
+    q = _quoted_table_ident(dialect, phys)
+    db.execute(text(f"UPDATE {q} SET {set_and_where}"), params)
+
+
+def _run_resolved_user_delete(db, logical_table: str, where_clause: str, params: dict[str, Any]) -> None:
+    phys = _physical_table_name(db, logical_table)
+    if not phys:
+        return
+    dialect = db.bind.dialect.name
+    q = _quoted_table_ident(dialect, phys)
+    db.execute(text(f"DELETE FROM {q} WHERE {where_clause}"), params)
 
 
 def delete_user(user_id: int, actor_user_id: Optional[int] = None) -> tuple[bool, str]:
@@ -1487,21 +1526,29 @@ def delete_user(user_id: int, actor_user_id: Optional[int] = None) -> tuple[bool
             {"approved_by": None},
             synchronize_session=False,
         )
-        for _stmt in (
-            "UPDATE Loan_Classification SET classified_by = NULL WHERE classified_by = :user_id",
-            "UPDATE Provision_Allocation SET allocated_by = NULL WHERE allocated_by = :user_id",
-            "UPDATE Loan_Approval SET approved_by = NULL WHERE approved_by = :user_id",
-        ):
-            _execute_optional_user_fk_sql(db, _stmt, {"user_id": user_id})
+        _uid = {"user_id": user_id}
+        _run_resolved_user_fk_update(
+            db,
+            "Loan_Classification",
+            "classified_by = NULL WHERE classified_by = :user_id",
+            _uid,
+        )
+        _run_resolved_user_fk_update(
+            db,
+            "Provision_Allocation",
+            "allocated_by = NULL WHERE allocated_by = :user_id",
+            _uid,
+        )
+        _run_resolved_user_fk_update(
+            db,
+            "Loan_Approval",
+            "approved_by = NULL WHERE approved_by = :user_id",
+            _uid,
+        )
 
         # Remove rows that require this user_id (non-null foreign keys).
-        db.query(AlertSubscriptionDB).filter(AlertSubscriptionDB.user_id == user_id).delete(synchronize_session=False)
-        try:
-            db.query(ChatSessionPinDB).filter(ChatSessionPinDB.user_id == user_id).delete(synchronize_session=False)
-        except Exception as exc:
-            if not _is_missing_db_object_error(exc):
-                raise
-            logger.debug("Skipping Chat_Session_Pin cleanup (table may be absent): %s", exc)
+        _run_resolved_user_delete(db, "Alert_Subscription", "user_id = :user_id", _uid)
+        _run_resolved_user_delete(db, "Chat_Session_Pin", "user_id = :user_id", _uid)
         db.query(ManagerUpgradeVoteDB).filter(ManagerUpgradeVoteDB.manager_user_id == user_id).delete(
             synchronize_session=False
         )
@@ -1539,6 +1586,12 @@ def delete_user(user_id: int, actor_user_id: Optional[int] = None) -> tuple[bool
         raise
     except Exception as exc:
         db.rollback()
+        detail = str(exc).strip()
+        if detail:
+            raise ValueError(
+                "Could not delete user because related data still exists. "
+                f"Database response: {detail[:500]}"
+            ) from exc
         raise ValueError("Could not delete user because related data still exists") from exc
     finally:
         db.close()
