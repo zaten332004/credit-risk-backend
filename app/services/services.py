@@ -576,7 +576,7 @@ def portfolio_risk_factor_impact() -> PortfolioRiskFactorsResponse:
                 ir = _safe_risk_interest_rate_pct(ir_raw)
                 lt = (app.loan_type or "").strip() if app is not None else None
                 cv = _to_float(app.collateral_value) if app is not None and app.collateral_value is not None else None
-                if cv <= 0:
+                if cv is not None and cv <= 0:
                     cv = None
 
                 cs = _safe_risk_credit_score(customer.credit_score)

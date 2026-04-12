@@ -39,6 +39,8 @@ def _safe_int(val: object) -> Optional[int]:
             return val
         if isinstance(val, float):
             return int(val)
+        if isinstance(val, Decimal):
+            return int(val)
         return int(str(val).strip())
     except Exception:
         return None
@@ -355,6 +357,29 @@ def _strip_table_prefix(key: str) -> str:
     if "[" in s and s.endswith("]"):
         return s.split("[", 1)[1][:-1]
     return s
+
+
+def _infer_column_names_from_sample_rows(rows: List[dict]) -> List[str]:
+    """When REST/DMV column discovery fails, derive display names from TOPN/EVALUATE row keys."""
+    if not rows or not isinstance(rows[0], dict):
+        return []
+    out: List[str] = []
+    for k in rows[0].keys():
+        name = _strip_table_prefix(str(k)).strip()
+        if name:
+            out.append(name)
+    return _dedupe_keep_order(out)
+
+
+def _scalar_int_from_first_row(rows: List[dict]) -> Optional[int]:
+    """First integer-like value in the first row (e.g. COUNTROWS wrapped in ROW())."""
+    if not rows or not isinstance(rows[0], dict):
+        return None
+    for v in rows[0].values():
+        n = _safe_int(v)
+        if n is not None:
+            return n
+    return None
 
 
 def _sample_table_rows(

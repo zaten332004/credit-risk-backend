@@ -81,6 +81,8 @@ class Settings(BaseSettings):
     power_bi_ai_context_max_columns: int = 8
     # Optional comma-separated keys to warn if missing on contract_table (empty = skip check).
     power_bi_ai_context_required_keys: str = ""
+    # Power BI /schema preview: max rows returned in sample_rows (total row count uses COUNTROWS separately).
+    power_bi_schema_sample_max_rows: int = 500
 
     # Optional: allow loading from .env without breaking when absent
     # IMPORTANT: extra="ignore" so unknown keys in .env won't crash startup.

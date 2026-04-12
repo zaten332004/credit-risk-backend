@@ -16,6 +16,9 @@ from app.services.analytics_data_service import (
     _extract_table_names,
     _extract_column_names,
     _extract_execute_queries_rows,
+    _infer_column_names_from_sample_rows,
+    _scalar_int_from_first_row,
+    _safe_int,
 )
 
 router = APIRouter(prefix="/powerbi", tags=["Power BI Integration"])
@@ -102,6 +105,9 @@ class PowerBITableSchema(BaseModel):
     name: str
     columns: List[str]
     sample_rows: List[Dict[str, Any]]
+    # Tổng số dòng trong model (COUNTROWS); sample_rows có thể ngắn hơn.
+    row_count: Optional[int] = None
+    column_count: Optional[int] = None
 
 
 class PowerBITableHintsRequest(BaseModel):
@@ -525,7 +531,8 @@ async def get_powerbi_schema(
     schemas: List[PowerBITableSchema] = []
     errors: Dict[str, str] = {}
     max_tables = 20
-    max_rows = 10
+    sample_cap = _safe_int(getattr(settings, "power_bi_schema_sample_max_rows", 500)) or 500
+    sample_cap = max(1, min(sample_cap, 100000))
 
     for name in table_names[:max_tables]:
         cols_resp = powerbi_service.get_table_columns_verbose(runtime_user, name)
@@ -533,10 +540,23 @@ async def get_powerbi_schema(
         if cols_resp.get("ok"):
             columns = _extract_column_names(cols_resp.get("result") or {})
 
-        # Sample rows (best-effort)
         escaped = _escape_dax_table_name(name)
-        dax = f"EVALUATE TOPN({max_rows}, '{escaped}')"
-        sample_resp = powerbi_service.execute_dax_query_verbose(runtime_user, dax)
+
+        # Total row count (lightweight; avoids returning every row in JSON).
+        row_count: Optional[int] = None
+        dax_count = f'EVALUATE ROW("RowCount", COUNTROWS(\'{escaped}\'))'
+        count_resp = powerbi_service.execute_dax_query_verbose(runtime_user, dax_count)
+        if count_resp.get("ok"):
+            count_rows = _extract_execute_queries_rows(count_resp.get("result") or {})
+            row_count = _scalar_int_from_first_row(count_rows)
+        else:
+            err_c = (count_resp.get("error") or count_resp.get("body") or "").strip()
+            if err_c and name not in errors:
+                errors[name] = err_c[:300]
+
+        # Sample rows (best-effort; bounded by sample_cap and ExecuteQueries maxRows).
+        dax_sample = f"EVALUATE TOPN({sample_cap}, '{escaped}')"
+        sample_resp = powerbi_service.execute_dax_query_verbose(runtime_user, dax_sample)
         rows: List[Dict[str, Any]] = []
         if sample_resp.get("ok"):
             rows = _extract_execute_queries_rows(sample_resp.get("result") or {})
@@ -545,11 +565,18 @@ async def get_powerbi_schema(
             if err:
                 errors[name] = err[:300]
 
+        if not columns and rows:
+            columns = _infer_column_names_from_sample_rows(rows)
+
+        col_count = len(columns) if columns else None
+
         schemas.append(
             PowerBITableSchema(
                 name=name,
                 columns=columns,
                 sample_rows=rows,
+                row_count=row_count,
+                column_count=col_count,
             )
         )
 
@@ -560,4 +587,5 @@ async def get_powerbi_schema(
         "errors": errors,
         "table_list_source": "api" if discovered_via_api else "saved_hints",
         "schema_sample_limit": max_tables,
+        "schema_row_sample_max": sample_cap,
     }
