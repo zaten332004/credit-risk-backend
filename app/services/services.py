@@ -1462,6 +1462,11 @@ def _run_resolved_user_delete(db, logical_table: str, where_clause: str, params:
     db.execute(text(f"DELETE FROM {q} WHERE {where_clause}"), params)
 
 
+def _manager_upgrade_schema_present(db) -> bool:
+    """False when Manager_Upgrade_* tables were never migrated (common on minimal MySQL / Railway)."""
+    return _physical_table_name(db, "Manager_Upgrade_Request") is not None
+
+
 def delete_user(user_id: int, actor_user_id: Optional[int] = None) -> tuple[bool, str]:
     db = SessionLocal()
     try:
@@ -1518,14 +1523,16 @@ def delete_user(user_id: int, actor_user_id: Optional[int] = None) -> tuple[bool
             {"user_id": None},
             synchronize_session=False,
         )
-        db.query(ManagerUpgradeRequestDB).filter(ManagerUpgradeRequestDB.nominated_by == user_id).update(
-            {"nominated_by": None},
-            synchronize_session=False,
-        )
-        db.query(ManagerUpgradeRequestDB).filter(ManagerUpgradeRequestDB.approved_by == user_id).update(
-            {"approved_by": None},
-            synchronize_session=False,
-        )
+        has_manager_upgrade = _manager_upgrade_schema_present(db)
+        if has_manager_upgrade:
+            db.query(ManagerUpgradeRequestDB).filter(ManagerUpgradeRequestDB.nominated_by == user_id).update(
+                {"nominated_by": None},
+                synchronize_session=False,
+            )
+            db.query(ManagerUpgradeRequestDB).filter(ManagerUpgradeRequestDB.approved_by == user_id).update(
+                {"approved_by": None},
+                synchronize_session=False,
+            )
         _uid = {"user_id": user_id}
         _run_resolved_user_fk_update(
             db,
@@ -1549,25 +1556,27 @@ def delete_user(user_id: int, actor_user_id: Optional[int] = None) -> tuple[bool
         # Remove rows that require this user_id (non-null foreign keys).
         _run_resolved_user_delete(db, "Alert_Subscription", "user_id = :user_id", _uid)
         _run_resolved_user_delete(db, "Chat_Session_Pin", "user_id = :user_id", _uid)
-        db.query(ManagerUpgradeVoteDB).filter(ManagerUpgradeVoteDB.manager_user_id == user_id).delete(
-            synchronize_session=False
-        )
+        if has_manager_upgrade:
+            db.query(ManagerUpgradeVoteDB).filter(ManagerUpgradeVoteDB.manager_user_id == user_id).delete(
+                synchronize_session=False
+            )
         db.query(ChatHistoryDB).filter(ChatHistoryDB.user_id == user_id).delete(synchronize_session=False)
         db.query(ChatSessionDB).filter(ChatSessionDB.user_id == user_id).delete(synchronize_session=False)
 
-        target_request_ids = [
-            int(request_id)
-            for (request_id,) in db.query(ManagerUpgradeRequestDB.request_id)
-            .filter(ManagerUpgradeRequestDB.target_user_id == user_id)
-            .all()
-        ]
-        if target_request_ids:
-            db.query(ManagerUpgradeVoteDB).filter(ManagerUpgradeVoteDB.request_id.in_(target_request_ids)).delete(
-                synchronize_session=False
-            )
-            db.query(ManagerUpgradeRequestDB).filter(ManagerUpgradeRequestDB.request_id.in_(target_request_ids)).delete(
-                synchronize_session=False
-            )
+        if has_manager_upgrade:
+            target_request_ids = [
+                int(request_id)
+                for (request_id,) in db.query(ManagerUpgradeRequestDB.request_id)
+                .filter(ManagerUpgradeRequestDB.target_user_id == user_id)
+                .all()
+            ]
+            if target_request_ids:
+                db.query(ManagerUpgradeVoteDB).filter(ManagerUpgradeVoteDB.request_id.in_(target_request_ids)).delete(
+                    synchronize_session=False
+                )
+                db.query(ManagerUpgradeRequestDB).filter(
+                    ManagerUpgradeRequestDB.request_id.in_(target_request_ids)
+                ).delete(synchronize_session=False)
 
         db.delete(row)
         log_action(
