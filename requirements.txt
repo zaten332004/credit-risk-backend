@@ -21,7 +21,6 @@ boto3==1.42.27
 # AI providers
 google-generativeai>=0.6.0
 google-genai
-openai>=1.0.0
 
 # Database (MySQL via SQLAlchemy + PyMySQL)
 sqlalchemy==2.0.35
