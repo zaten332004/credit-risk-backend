@@ -310,7 +310,7 @@ SECRET_KEY=your-super-secret-key
 GEMINI_API_KEY=your-google-gemini-api-key
 # Optional: default Gemini model (backend can also be overridden per message via /ai-chat/models + model param)
 GEMINI_MODEL=gemini-2.5-flash-lite
-# AI chat provider (optional): gemini|openai|langflow|mock
+# AI chat provider (optional): gemini|mock
 AI_CHAT_PROVIDER=gemini
 # If set to 1/true, fallback to mock responses on provider errors (default: 0/false)
 AI_CHAT_FALLBACK_TO_MOCK=0

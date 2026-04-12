@@ -28,7 +28,11 @@ from app.db.models import ChatHistoryDB, ChatSessionDB
 from app.schemas.schemas import User
 from app.services.gemini_ai_chat_service import GeminiResourceExhaustedError
 from app.services.mock_ai_chat_service import MockAIChatService
-from app.services.analytics_data_service import get_analysis_context, get_analysis_context_powerbi
+from app.services.analytics_data_service import (
+    _extract_table_names,
+    get_analysis_context,
+    get_analysis_context_powerbi,
+)
 from app.services.ai_chat_file_context_service import AIChatFileContextService
 from app.services.chat_session_metadata import set_chat_session_pinned, update_chat_session_initial_context, update_chat_session_name
 from app.services.services import get_upload_job_content, persist_upload_job_file
@@ -205,7 +209,6 @@ class AIChatService(Protocol):
 
 def _provider_name() -> str:
     configured = (os.getenv("AI_CHAT_PROVIDER") or settings.ai_chat_provider or "gemini").strip().lower()
-    # Keep runtime provider focused on Gemini; ignore openai/langflow to simplify stack.
     if configured in {"", "gemini"}:
         return "gemini"
     if configured == "mock":
@@ -221,10 +224,6 @@ def _resolved_provider_name(chat_service: object) -> str:
 
     if "mock" in marker:
         return "mock"
-    if "openai" in marker:
-        return "openai"
-    if "langflow" in marker:
-        return "langflow"
     if "gemini" in marker:
         return "gemini"
     return "unknown"
@@ -444,9 +443,6 @@ def _looks_like_auth_or_config_error(err: Exception) -> bool:
         "403",
         "gemini_api_key",
         "gemini_api_key not found",
-        "openai_api_key",
-        "openai_api_key not found",
-        "langflow not configured",
         "resource_exhausted",
         "quota exceeded",
         "rate limit",
@@ -988,12 +984,7 @@ async def ai_chat_debug(current_user: User = Depends(get_current_active_user)):
             and (settings.power_bi_workspace_id or "").strip()
             and (settings.power_bi_dataset_id or "").strip()
         ),
-        "has_openai_key": bool(os.getenv("OPENAI_API_KEY") or settings.openai_api_key),
-        "openai_model": (os.getenv("OPENAI_MODEL") or settings.openai_model or "").strip() or None,
         "fallback_to_mock": _fallback_to_mock_enabled(),
-        "langflow_run_url": None,
-        "langflow_base_url": None,
-        "langflow_flow_id": None,
     }
 
 
@@ -1008,6 +999,104 @@ async def ai_chat_context_preview(
     else:
         context = get_analysis_context(db)
     return {"source": source, "context": context}
+
+
+@router.get("/powerbi-readiness")
+async def ai_chat_powerbi_readiness(current_user: User = Depends(get_current_active_user)):
+    """
+    Kiểm tra nhanh trước khi chat với nguồn Power BI (theo workspace/dataset đã lưu cho user):
+    credential máy chủ, token, DAX ping, danh sách bảng từ API hoặc table hints trên server.
+    """
+    ru = powerbi_service.get_runtime_user(current_user)
+    warnings: List[str] = []
+
+    ws = (ru.power_bi_workspace_id or "").strip()
+    ds = (ru.power_bi_dataset_id or "").strip()
+    tn_user = (ru.power_bi_tenant_id or "").strip()
+    user_configured = bool(ws and ds and ru.power_bi_enabled)
+
+    if not ws or not ds:
+        warnings.append("Chưa lưu workspace/dataset Power BI cho tài khoản — hãy cấu hình ở Tích hợp Power BI.")
+
+    cid = (settings.power_bi_client_id or os.getenv("POWER_BI_CLIENT_ID") or "").strip()
+    csec = (settings.power_bi_client_secret or os.getenv("POWER_BI_CLIENT_SECRET") or "").strip()
+    has_server_credentials = bool(cid and csec)
+    if not has_server_credentials:
+        warnings.append("Thiếu POWER_BI_CLIENT_ID / POWER_BI_CLIENT_SECRET trên máy chủ (.env).")
+
+    tenant_effective = (
+        tn_user
+        or (settings.power_bi_tenant_id or os.getenv("POWER_BI_TENANT_ID") or "").strip()
+    )
+    if user_configured and has_server_credentials and not tenant_effective:
+        warnings.append(
+            "Thiếu Tenant ID: thêm vào cấu hình tài khoản (màn Power BI) hoặc POWER_BI_TENANT_ID trong .env."
+        )
+
+    tenant_source = "user" if tn_user else ("env" if tenant_effective else "none")
+
+    token_ok = False
+    ping_ok = False
+    dataset_tables_ok = False
+    discovered_count = 0
+    hint_count = len(list(getattr(ru, "power_bi_table_names", None) or []))
+
+    if user_configured and has_server_credentials and tenant_effective:
+        tok = powerbi_service.get_access_token(ru)
+        token_ok = bool(tok)
+        if not token_ok:
+            warnings.append(
+                "Không lấy được access token — kiểm tra tenant, app registration, client secret và cài đặt tenant Power BI (Service Principal)."
+            )
+        else:
+            ping = powerbi_service.execute_dax_query_verbose(ru, 'EVALUATE ROW("Ping", 1)')
+            ping_ok = bool(ping.get("ok"))
+            if not ping_ok:
+                body = str(ping.get("body") or ping.get("error") or "").strip()[:400]
+                warnings.append(f"DAX ping thất bại: {body}" if body else "DAX ping thất bại.")
+            if ping_ok:
+                tresp = powerbi_service.get_dataset_tables_verbose(ru)
+                dataset_tables_ok = bool(tresp.get("ok"))
+                if dataset_tables_ok:
+                    names = _extract_table_names(tresp.get("result") or {})
+                    discovered_count = len(names)
+                if not dataset_tables_ok and hint_count == 0:
+                    detail = str(tresp.get("body") or tresp.get("error") or "").strip()[:300]
+                    if detail:
+                        warnings.append(f"Không đọc được danh sách bảng từ API: {detail}")
+                    else:
+                        warnings.append(
+                            "Không đọc được danh sách bảng từ API — lưu gợi ý tên bảng (table hints) hoặc kiểm tra quyền Build/Read trên dataset."
+                        )
+
+    ready_for_ai_context = bool(
+        user_configured
+        and has_server_credentials
+        and bool(tenant_effective)
+        and token_ok
+        and ping_ok
+        and (discovered_count > 0 or hint_count > 0)
+    )
+
+    if user_configured and has_server_credentials and tenant_effective and token_ok and ping_ok:
+        if discovered_count == 0 and hint_count == 0:
+            warnings.append(
+                "Chưa có tên bảng để lấy mẫu dữ liệu: API không trả danh sách và chưa có gợi ý bảng trên server (đồng bộ từ màn Power BI hoặc POST /powerbi/table-hints)."
+            )
+
+    return {
+        "user_configured": user_configured,
+        "has_server_credentials": has_server_credentials,
+        "tenant_source": tenant_source,
+        "tenant_configured": bool(tenant_effective),
+        "token_ok": token_ok,
+        "ping_ok": ping_ok,
+        "dataset_tables_ok": dataset_tables_ok,
+        "discovered_table_count": discovered_count,
+        "hint_table_count": hint_count,
+        "ready_for_ai_context": ready_for_ai_context,
+        "warnings": warnings,
+    }
 
 
 @router.get("/powerbi-diagnostic")

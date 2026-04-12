@@ -44,13 +44,11 @@ class Settings(BaseSettings):
     # JWT lifetime (minutes). Frontend enforces idle logout separately; keep this long enough for active work sessions.
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080
 
-    # AI providers
-    ai_chat_provider: str = ""  # gemini|openai|langflow|mock
+    # AI providers (Gemini; optional mock via AI_CHAT_PROVIDER=mock)
+    ai_chat_provider: str = ""  # gemini|mock
     ai_chat_context_source: str = ""  # db|powerbi
     gemini_api_key: str = ""
     gemini_model: str = ""
-    openai_api_key: str = ""
-    openai_model: str = ""
     # Debug/testing toggles
     ai_chat_powerbi_query_allow_any: bool = False
 

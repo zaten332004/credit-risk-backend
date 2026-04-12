@@ -15,7 +15,7 @@ _chat_sessions: Dict[str, ChatSession] = {}
 def simple_chat_reply(message: str) -> str:
     """
     Placeholder chatbot behavior.
-    Later: integrate Langflow/LangChain + AWS (Bedrock/Lambda) or your chosen LLM stack.
+    Later: extend with additional LLM backends or AWS (Bedrock/Lambda) if needed.
     """
     msg = message.strip().lower()
     if "risk" in msg or "rủi ro" in msg:
