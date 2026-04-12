@@ -1398,6 +1398,31 @@ def set_user_role(user_id: int, role: str, actor_user_id: Optional[int] = None) 
         db.close()
 
 
+def _is_missing_db_object_error(exc: BaseException) -> bool:
+    """True when a statement failed because a table/view referenced in SQL does not exist."""
+    msg = str(exc).lower()
+    if "doesn't exist" in msg or "does not exist" in msg or "unknown table" in msg:
+        return True
+    if "no such table" in msg:
+        return True
+    if "invalid object name" in msg:
+        return True
+    orig = getattr(exc, "orig", None)
+    if orig is not None and orig is not exc:
+        return _is_missing_db_object_error(orig)
+    return False
+
+
+def _execute_optional_user_fk_sql(db, stmt: str, params: dict[str, Any]) -> None:
+    try:
+        db.execute(text(stmt), params)
+    except Exception as exc:
+        if _is_missing_db_object_error(exc):
+            logger.debug("Skipping optional user-delete FK cleanup: %s (%s)", stmt.strip().split()[1], exc)
+            return
+        raise
+
+
 def delete_user(user_id: int, actor_user_id: Optional[int] = None) -> tuple[bool, str]:
     db = SessionLocal()
     try:
@@ -1462,22 +1487,21 @@ def delete_user(user_id: int, actor_user_id: Optional[int] = None) -> tuple[bool
             {"approved_by": None},
             synchronize_session=False,
         )
-        db.execute(
-            text("UPDATE Loan_Classification SET classified_by = NULL WHERE classified_by = :user_id"),
-            {"user_id": user_id},
-        )
-        db.execute(
-            text("UPDATE Provision_Allocation SET allocated_by = NULL WHERE allocated_by = :user_id"),
-            {"user_id": user_id},
-        )
-        db.execute(
-            text("UPDATE Loan_Approval SET approved_by = NULL WHERE approved_by = :user_id"),
-            {"user_id": user_id},
-        )
+        for _stmt in (
+            "UPDATE Loan_Classification SET classified_by = NULL WHERE classified_by = :user_id",
+            "UPDATE Provision_Allocation SET allocated_by = NULL WHERE allocated_by = :user_id",
+            "UPDATE Loan_Approval SET approved_by = NULL WHERE approved_by = :user_id",
+        ):
+            _execute_optional_user_fk_sql(db, _stmt, {"user_id": user_id})
 
         # Remove rows that require this user_id (non-null foreign keys).
         db.query(AlertSubscriptionDB).filter(AlertSubscriptionDB.user_id == user_id).delete(synchronize_session=False)
-        db.query(ChatSessionPinDB).filter(ChatSessionPinDB.user_id == user_id).delete(synchronize_session=False)
+        try:
+            db.query(ChatSessionPinDB).filter(ChatSessionPinDB.user_id == user_id).delete(synchronize_session=False)
+        except Exception as exc:
+            if not _is_missing_db_object_error(exc):
+                raise
+            logger.debug("Skipping Chat_Session_Pin cleanup (table may be absent): %s", exc)
         db.query(ManagerUpgradeVoteDB).filter(ManagerUpgradeVoteDB.manager_user_id == user_id).delete(
             synchronize_session=False
         )
