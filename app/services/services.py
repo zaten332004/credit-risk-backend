@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import case, desc, func, inspect, literal, or_, text
+from sqlalchemy import case, delete, desc, func, inspect, literal, or_, text
 from sqlalchemy.orm import aliased
 
 from app.core.security import normalize_role_name, pwd_context
@@ -1578,7 +1578,10 @@ def delete_user(user_id: int, actor_user_id: Optional[int] = None) -> tuple[bool
                     ManagerUpgradeRequestDB.request_id.in_(target_request_ids)
                 ).delete(synchronize_session=False)
 
-        db.delete(row)
+        # Core DELETE avoids loading relationship collections (e.g. Alert_Subscription) when
+        # those tables are absent from the DB but still mapped on UserDB.
+        db.execute(delete(UserDB).where(UserDB.user_id == user_id))
+        db.expunge(row)
         log_action(
             db,
             user_id=actor_user_id,
