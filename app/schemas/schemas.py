@@ -228,6 +228,7 @@ class ProfileRead(BaseModel):
     role: str = "viewer"
     status: str | None = None
     is_email_verified: bool = False
+    has_pin: bool = False
     created_at: datetime
 
 

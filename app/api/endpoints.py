@@ -429,8 +429,13 @@ async def create_customer_endpoint(
 async def update_customer_endpoint(
     customer_id: int,
     body: CustomerUpdate,
-    current_user: User = Depends(get_current_manager_or_admin_user),  # Chỉ Manager/Admin
+    current_user: User = Depends(get_current_analyst_user),  # Analyst+ (viewer excluded)
 ) -> CustomerRead:
+    if current_user.role == "analyst" and body.application_status is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Analysts cannot change application status; use manager or admin for approval.",
+        )
     updated = customer_intake_service.update_customer(
         customer_id,
         body,
@@ -462,7 +467,7 @@ async def update_customer_status_endpoint(
 @router.delete("/customers/{customer_id}", response_model=MessageResponse, tags=["customers"])
 async def delete_customer_endpoint(
     customer_id: int,
-    current_user: User = Depends(get_current_manager_or_admin_user),  # Chỉ Manager/Admin
+    current_user: User = Depends(get_current_analyst_user),  # Analyst+ (viewer excluded)
 ) -> MessageResponse:
     deleted = customer_intake_service.delete_customer(customer_id, deleted_by_user_id=current_user.id)
     if not deleted:

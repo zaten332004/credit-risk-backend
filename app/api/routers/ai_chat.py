@@ -41,6 +41,19 @@ router = APIRouter(prefix="/ai-chat", tags=["AI Chat"])
 _ROLE_ORDER = {"viewer": 0, "analyst": 1, "manager": 2, "admin": 3}
 
 
+def _enforce_ai_data_source_rbac(customer_context: Optional[dict], user: User) -> None:
+    """Reject privileged AI data sources for lower roles (e.g. alerts → manager+)."""
+    if not isinstance(customer_context, dict):
+        return
+    raw = str(customer_context.get("ai_data_source") or customer_context.get("aiDataSource") or "").strip().lower()
+    if raw in ("alerts", "alert", "canh_bao", "danh_muc_alerts", "alert_list"):
+        if _ROLE_ORDER.get(_user_role(user), 0) < _ROLE_ORDER.get("manager", 0):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Nguồn dữ liệu Alerts chỉ dành cho Manager hoặc Admin.",
+            )
+
+
 class StartChatRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -536,6 +549,7 @@ async def send_message(
     else:
         selected_model = getattr(chat_service, "model", None)
     effective_customer_context = _merge_customer_context_with_powerbi(request.customer_context, current_user)
+    _enforce_ai_data_source_rbac(effective_customer_context, current_user)
     session_id = (request.session_id or "").strip() or None
     created_session = False
     greeting_message: Optional[str] = None

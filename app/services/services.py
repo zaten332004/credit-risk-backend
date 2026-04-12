@@ -1066,6 +1066,50 @@ def list_alerts(status: Optional[str], type_: Optional[str]) -> List[AlertRead]:
         db.close()
 
 
+def build_alerts_ai_context(db, *, max_rows: int = 300) -> str:
+    """
+    Plain-text snapshot of alerts for AI chat. Uses the caller's DB session (same as chat request).
+    Includes medium/high/critical severities; filters to approved customers like the alerts list API.
+    """
+    try:
+        _sync_alerts_from_live_data(db)
+    except Exception:
+        logger.exception("build_alerts_ai_context: sync failed")
+        db.rollback()
+
+    approved_customers_latest = _approved_customers_by_latest_application(db)
+    rows = (
+        db.query(AlertDB)
+        .filter(AlertDB.severity.in_(["medium", "high", "critical"]))
+        .order_by(desc(AlertDB.created_at), desc(AlertDB.alert_id))
+        .limit(max(50, min(max_rows * 2, 2000)))
+        .all()
+    )
+    filtered = [r for r in rows if r.customer_id is not None and int(r.customer_id) in approved_customers_latest]
+    filtered = filtered[:max_rows]
+
+    if not filtered:
+        return (
+            "Không có cảnh báo nào phù hợp trong dữ liệu hiện có "
+            "(đã lọc theo khách hàng có hồ sơ đã duyệt, mức medium/high/critical)."
+        )
+
+    lines: List[str] = [
+        "--- Danh mục cảnh báo (Alert) ---",
+        f"Số bản ghi gửi cho AI: {len(filtered)} (giới hạn hiển thị).",
+        "Định dạng: ID | customer_id | tên | loại | mức | trạng thái | nội dung",
+    ]
+    for r in filtered:
+        cid = int(r.customer_id) if r.customer_id is not None else None
+        name = (r.customer.full_name if r.customer else None) or (f"KH {cid}" if cid is not None else "—")
+        st = "đã xử lý" if r.is_resolved else "đang mở"
+        msg = (r.message or "").replace("\n", " ").strip()
+        lines.append(
+            f"- {r.alert_id} | {cid} | {name} | {r.alert_type} | {r.severity} | {st} | {msg}"
+        )
+    return "\n".join(lines)
+
+
 def subscribe_alerts(body: AlertSubscriptionCreate) -> AlertSubscriptionRead:
     db = SessionLocal()
     try:

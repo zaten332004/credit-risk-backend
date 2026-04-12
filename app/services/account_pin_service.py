@@ -159,7 +159,11 @@ def reset_password_with_pin(db: Session, email: str, pin: str, new_password: str
     if not pwd_context.verify(normalized_pin, user.pin_hash):
         return False, "Invalid email or PIN"
 
-    user.password_hash = pwd_context.hash((new_password or "").strip())
+    plain_pw = (new_password or "").strip()
+    if (user.password_hash or "").strip() and pwd_context.verify(plain_pw, user.password_hash):
+        return False, "New password must be different from your current password."
+
+    user.password_hash = pwd_context.hash(plain_pw)
     user.updated_at = datetime.utcnow()
     log_action(
         db,

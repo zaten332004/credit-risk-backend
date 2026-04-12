@@ -4,8 +4,8 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -15,15 +15,28 @@ from app.api.routers.loan_products import router as loan_products_router
 from app.api.routers.ai_chat import router as ai_chat_router
 from app.api.routers.powerbi import router as powerbi_router
 # from app.api.routers import upload, analysis  # TODO: Fix imports
+from app.core.client_safe_errors import public_message_for_exception
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _configure_server_logging() -> None:
+    """
+    Tắt access log dạng: INFO: 1.2.3.4 - "GET /api/v1/... HTTP/1.1"
+    (uvicorn.access). Bật lại khi cần debug: UVICORN_ACCESS_LOG=1
+    """
+    if os.getenv("UVICORN_ACCESS_LOG", "").strip().lower() in ("1", "true", "yes", "on"):
+        return
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.services.audit_service import cleanup_expired_audit_logs
     from app.services.services import cleanup_expired_upload_jobs, cleanup_invalid_upload_jobs
+
+    _configure_server_logging()
 
     tasks: list[asyncio.Task[None]] = []
 
@@ -84,6 +97,19 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
+
+_configure_server_logging()
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Lỗi chưa được bắt cụ thể: log stack server, JSON detail an toàn cho client (không lộ SQL)."""
+    logger.exception("Unhandled error %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": public_message_for_exception(exc)},
+    )
+
 
 # CORS for frontend apps (React/Vite/etc.)
 default_origins = [

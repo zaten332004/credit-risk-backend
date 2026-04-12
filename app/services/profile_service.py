@@ -58,6 +58,7 @@ def _build_avatar_url(user: UserDB) -> Optional[str]:
 
 
 def _to_profile_read(user: UserDB, role_name: Optional[str]) -> ProfileRead:
+    pin_hash = getattr(user, "pin_hash", None) or ""
     return ProfileRead(
         user_id=user.user_id,
         username=user.username,
@@ -68,6 +69,7 @@ def _to_profile_read(user: UserDB, role_name: Optional[str]) -> ProfileRead:
         role=_resolve_role_name(user, role_name),
         status=user.status,
         is_email_verified=bool(user.is_email_verified),
+        has_pin=bool(str(pin_hash).strip()),
         created_at=user.created_at,
     )
 

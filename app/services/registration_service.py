@@ -77,7 +77,7 @@ class RegistrationService:
             return False, "Registration not found"
 
         if user.is_email_verified:
-            return False, "Email already verified"
+            return False, "This registration confirmation link has already been used."
 
         verification_token = secrets.token_urlsafe(32)
         user.verification_token = verification_token
@@ -241,7 +241,7 @@ class RegistrationService:
                 return False, "Invalid verification token"
 
             if user.is_email_verified:
-                return False, "Email already verified"
+                return False, "This registration confirmation link has already been used."
 
             user.is_email_verified = True
             user.verification_token = None
@@ -266,7 +266,10 @@ class RegistrationService:
                 },
             )
             db.commit()
-            return True, "Email verified successfully! Your account is pending admin approval."
+            return (
+                True,
+                "Registration link confirmed. Set your security PIN if prompted; your account is pending admin approval.",
+            )
 
         except Exception as e:
             db.rollback()
