@@ -82,6 +82,28 @@ def _clean_text(value: Any) -> Optional[str]:
     return text or None
 
 
+# User-visible (API detail); paired English in credit-risk-frontend `KNOWN_MESSAGE_ROWS`.
+COLLATERAL_ID_DUPLICATE_VI = "Tài sản này đã được đăng ký đảm bảo cho hồ sơ khác."
+
+
+def _assert_collateral_id_unique(
+    db: Session,
+    collateral_id: Any,
+    exclude_application_id: Optional[int],
+) -> None:
+    """Raise ValueError if another loan application already uses this collateral code."""
+    key = (_clean_text(collateral_id) or "").lower()
+    if not key:
+        return
+    q = db.query(LoanApplicationDB).filter(
+        func.lower(func.trim(LoanApplicationDB.collateral_id)) == key,
+    )
+    if exclude_application_id is not None:
+        q = q.filter(LoanApplicationDB.application_id != int(exclude_application_id))
+    if q.first() is not None:
+        raise ValueError(COLLATERAL_ID_DUPLICATE_VI)
+
+
 def _parse_float(value: Any) -> Optional[float]:
     text = _clean_text(value)
     if text is None:
@@ -881,6 +903,7 @@ def create_customer(payload: CustomerCreate, created_by: str, created_by_user_id
             )
             db.add(application)
             db.flush()
+            _assert_collateral_id_unique(db, application.collateral_id, int(application.application_id))
             st_app = _normalize_application_status(application.loan_status)
             if st_app in {"approved", "disbursed"}:
                 anchor = application.application_date or datetime.utcnow().date()
@@ -991,6 +1014,7 @@ def update_customer(
                     customer_monthly_income=float(customer.monthly_income) if customer.monthly_income is not None else None,
                 )
                 db.flush()
+                _assert_collateral_id_unique(db, application.collateral_id, int(application.application_id))
 
         if application is not None:
             st_app = _normalize_application_status(application.loan_status)
@@ -1474,6 +1498,7 @@ def import_customer_file(
                     customer_monthly_income=float(customer.monthly_income) if customer.monthly_income is not None else None,
                 )
                 db.flush()
+                _assert_collateral_id_unique(db, application.collateral_id, int(application.application_id))
 
                 risk_score, risk_level = _create_risk_prediction(db, customer=customer, application=application)
                 log_action(

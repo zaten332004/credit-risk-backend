@@ -21,6 +21,7 @@ from app.db.session import SessionLocal
 from app.schemas.schemas import CustomerUpdate, LoanApplicationRead
 from app.services.customer_intake_service import (
     _apply_application_payload,
+    _assert_collateral_id_unique,
     _normalize_loan_type,
     _create_risk_prediction,
 )
@@ -106,6 +107,7 @@ def create_loan_application_for_customer(
             customer_monthly_income=float(customer.monthly_income) if customer.monthly_income is not None else None,
         )
         db.flush()
+        _assert_collateral_id_unique(db, application.collateral_id, int(application.application_id))
 
         risk_score, risk_level = _create_risk_prediction(db, customer=customer, application=application)
         log_action(

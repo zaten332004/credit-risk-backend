@@ -108,6 +108,12 @@ from app.services import services
 
 router = APIRouter()
 
+# Kept short for UI toasts; full troubleshooting: shared UPLOAD_JOBS_STORAGE_DIR, single worker, job TTL.
+UPLOAD_JOB_CONTENT_NOT_FOUND_DETAIL = (
+    "Không tìm thấy nội dung upload cho job. · "
+    "Upload not found (expired job, API restarted, or set UPLOAD_JOBS_STORAGE_DIR)."
+)
+
 
 # ---------------------------------------------------------------------------
 # Health (public)
@@ -1295,11 +1301,7 @@ async def job_content_endpoint(
     if not payload:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
-                "Upload content not found for this job. "
-                "It may be invalid/expired, the API may have restarted without the file on disk, "
-                "or another server instance handled the upload (use UPLOAD_JOBS_STORAGE_DIR on a shared volume or a single worker)."
-            ),
+            detail=UPLOAD_JOB_CONTENT_NOT_FOUND_DETAIL,
         )
     safe_offset = max(0, offset)
     safe_limit = max(1, min(limit, 500))
@@ -1332,11 +1334,7 @@ async def job_errors_endpoint(
     if not payload:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
-                "Upload content not found for this job. "
-                "It may be invalid/expired, the API may have restarted without the file on disk, "
-                "or another server instance handled the upload (use UPLOAD_JOBS_STORAGE_DIR on a shared volume or a single worker)."
-            ),
+            detail=UPLOAD_JOB_CONTENT_NOT_FOUND_DETAIL,
         )
 
     import_summary = payload.get("import_summary") or {}
