@@ -105,6 +105,18 @@ class PasswordResetConfirmBody(BaseModel):
         return _validate_password_strength(v)
 
 
+class ForgotPinRequestBody(BaseModel):
+    email: str = Field(..., description="Registered email address")
+
+    @validator("email")
+    def validate_email(cls, v: str) -> str:
+        return _validate_email_format(v)
+
+
+class ForgotPinStatusResponse(BaseModel):
+    has_pending_request: bool = False
+
+
 class AccountPinSetBody(BaseModel):
     pin: str = Field(..., pattern=r"^\d{6}$", description="6-digit PIN")
 
@@ -133,6 +145,26 @@ class AccountPinEmailChangeBody(BaseModel):
     @validator("pin")
     def validate_pin(cls, v: str) -> str:
         return _validate_pin_digits(v)
+
+
+class AdminPinResetRequestRead(BaseModel):
+    user_id: int
+    email: str
+    full_name: str
+    requested_at: Optional[str] = None
+    status: str = "pending"
+
+
+class AdminPinResetApproveBody(BaseModel):
+    pin: str = Field(..., pattern=r"^\d{6}$", description="New 6-digit PIN")
+
+    @validator("pin")
+    def validate_pin(cls, v: str) -> str:
+        return _validate_pin_digits(v)
+
+
+class AdminPinResetRejectBody(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=500)
 
 
 class PendingAccountStatusResponse(BaseModel):

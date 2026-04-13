@@ -43,6 +43,11 @@ from app.schemas.schemas import (
     AccountPinSetBody,
     AccountPinChangeBody,
     AccountPinEmailChangeBody,
+    AdminPinResetApproveBody,
+    AdminPinResetRejectBody,
+    AdminPinResetRequestRead,
+    ForgotPinRequestBody,
+    ForgotPinStatusResponse,
     ManagerUpgradeNominationCreate,
     ManagerUpgradeRequestCreate,
     ManagerUpgradeRequestRead,
@@ -185,6 +190,26 @@ async def request_password_reset_endpoint(
     return MessageResponse(message=message)
 
 
+@router.post("/auth/forgot-pin/request", response_model=MessageResponse, tags=["auth"])
+async def request_forgot_pin_endpoint(
+    body: ForgotPinRequestBody,
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    success, message = account_pin_service.request_pin_reset_by_email(db, body.email)
+    if not success:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
+    return MessageResponse(message=message)
+
+
+@router.get("/auth/forgot-pin/status", response_model=ForgotPinStatusResponse, tags=["auth"])
+async def forgot_pin_status_endpoint(
+    email: str,
+    db: Session = Depends(get_db),
+) -> ForgotPinStatusResponse:
+    payload = account_pin_service.pin_reset_status_by_email(db, email)
+    return ForgotPinStatusResponse(**payload)
+
+
 @router.post("/auth/forgot-password/confirm", response_model=MessageResponse, tags=["auth"])
 async def confirm_password_reset_endpoint(
     body: PasswordResetConfirmBody,
@@ -195,6 +220,52 @@ async def confirm_password_reset_endpoint(
         body.email,
         body.code,
         body.new_password,
+    )
+    if not success:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
+    return MessageResponse(message=message)
+
+
+@router.get("/admin/pin-reset-requests", response_model=List[AdminPinResetRequestRead], tags=["admin"])
+async def list_pin_reset_requests_endpoint(
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+) -> List[AdminPinResetRequestRead]:
+    _ = current_user
+    rows = account_pin_service.list_pending_pin_reset_requests(db)
+    return [AdminPinResetRequestRead(**row) for row in rows]
+
+
+@router.post("/admin/pin-reset-requests/{user_id}/approve", response_model=MessageResponse, tags=["admin"])
+async def approve_pin_reset_request_endpoint(
+    user_id: int,
+    body: AdminPinResetApproveBody,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    success, message = account_pin_service.admin_set_user_pin(
+        db,
+        target_user_id=user_id,
+        pin=body.pin,
+        actor_admin_id=current_user.id,
+    )
+    if not success:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
+    return MessageResponse(message=message)
+
+
+@router.post("/admin/pin-reset-requests/{user_id}/reject", response_model=MessageResponse, tags=["admin"])
+async def reject_pin_reset_request_endpoint(
+    user_id: int,
+    body: AdminPinResetRejectBody,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    success, message = account_pin_service.reject_pin_reset_request(
+        db,
+        user_id=user_id,
+        actor_admin_id=current_user.id,
+        reason=body.reason,
     )
     if not success:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
