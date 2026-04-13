@@ -242,6 +242,7 @@ def list_approved_loan_workbench(limit: int = 500) -> List[Dict[str, Any]]:
                     "loan_purpose": app.loan_purpose,
                     "loan_amount": float(app.loan_amount) if app.loan_amount is not None else None,
                     "loan_term": _safe_int(app.loan_term),
+                    "interest_rate": float(app.interest_rate) if app.interest_rate is not None else None,
                     "facility_id": _safe_int(facility.facility_id) if facility else None,
                     "next_installment_no": _safe_int(next_row.installment_no) if next_row else None,
                     "next_schedule_id": _safe_int(next_row.schedule_id) if next_row else None,
@@ -252,6 +253,27 @@ def list_approved_loan_workbench(limit: int = 500) -> List[Dict[str, Any]]:
                     "next_paid": next_meta.get("paid"),
                 }
             )
+
+        facility_ids = [int(r["facility_id"]) for r in out if r.get("facility_id") is not None]
+        paid_map: Dict[int, float] = {}
+        if facility_ids:
+            uniq_fids = sorted(set(facility_ids))
+            paid_rows = (
+                db.query(LoanPaymentDB.facility_id, func.coalesce(func.sum(LoanPaymentDB.amount_paid), 0))
+                .filter(LoanPaymentDB.facility_id.in_(uniq_fids))
+                .group_by(LoanPaymentDB.facility_id)
+                .all()
+            )
+            for fid_row, total in paid_rows:
+                paid_map[int(fid_row)] = float(total or 0)
+
+        for row in out:
+            fid = row.get("facility_id")
+            if fid is not None:
+                row["cumulative_paid"] = paid_map.get(int(fid), 0.0)
+            else:
+                row["cumulative_paid"] = 0.0
+
         db.commit()
         return out
     except Exception:

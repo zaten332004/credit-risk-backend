@@ -26,7 +26,7 @@ from app.core.security import get_current_active_user
 from app.db.session import SessionLocal
 from app.db.models import ChatHistoryDB, ChatSessionDB
 from app.schemas.schemas import User
-from app.services.gemini_ai_chat_service import GeminiResourceExhaustedError
+from app.services.gemini_ai_chat_service import GeminiResourceExhaustedError, GeminiServiceOverloadedError
 from app.services.mock_ai_chat_service import MockAIChatService
 from app.services.analytics_data_service import (
     _extract_table_names,
@@ -595,6 +595,18 @@ async def send_message(
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=detail_429,
+                headers=headers,
+            )
+
+        if isinstance(e, GeminiServiceOverloadedError):
+            headers = {}
+            retry_after = getattr(e, "retry_after_seconds", None)
+            if isinstance(retry_after, int) and retry_after > 0:
+                headers["Retry-After"] = str(retry_after)
+            detail_503 = str(e).strip() or "Model AI tạm thời quá tải. Vui lòng thử lại sau."
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=detail_503,
                 headers=headers,
             )
 

@@ -61,6 +61,14 @@ class GeminiResourceExhaustedError(RuntimeError):
         self.retry_after_seconds = retry_after_seconds
 
 
+class GeminiServiceOverloadedError(RuntimeError):
+    """Gemini returned 503 / UNAVAILABLE (capacity spikes). Prefer HTTP 503 + Retry-After upstream."""
+
+    def __init__(self, message: str, retry_after_seconds: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
 def _parse_retry_after_seconds(msg: str) -> Optional[int]:
     s = msg or ""
 
@@ -80,6 +88,18 @@ def _looks_like_resource_exhausted(msg: str) -> bool:
     return ("resource_exhausted" in s or "quota exceeded" in s) and (
         "429" in s or "code': 429" in s or 'code": 429' in s
     )
+
+
+def _looks_like_service_unavailable(msg: str) -> bool:
+    """503 UNAVAILABLE from Google GenAI (high demand / temporary outage)."""
+    s = (msg or "").lower()
+    if "503" in msg and ("unavailable" in s or "servererror" in s):
+        return True
+    if "high demand" in s and ("model" in s or "gemini" in s or "try again later" in s):
+        return True
+    if "'status': 'unavailable'" in s or '"status": "unavailable"' in s:
+        return True
+    return False
 
 
 def _powerbi_context_available() -> bool:
@@ -377,6 +397,7 @@ class GeminiAIChatService:
         "fast": (
             "Che do Nhanh (mo hinh nhe):\n"
             "- Uu tien tra loi DUNG va DAY DU theo ngu canh — khong cat ngan neu thieu buoc hoac thieu y chinh; co the gon nhung khong bo sot ket luan can thiet.\n"
+            "- Dat ket luan / so lieu chinh o dau (hoac ngay sau 1 cau nen) khi cau hoi dinh luong hoac can quyet dinh nhanh.\n"
             "- Truoc khi ket luan, luot tat ca khoi ngu canh (file / tong hop / FAQ) de khong bo sot chi tiet lien quan; neu khong co, noi ro.\n"
             "- Gom y thanh cac diem co can cu (2-5 y neu can); co the gop y lien quan hoac tach ro khi giup day du hon.\n"
             "- Cau hoi mo ho: neu van tra loi duoc thi tra loi day du voi gia dinh ro; chi hoi them DUNG MOT cau khi that su thieu thong tin bat buoc.\n"
@@ -386,6 +407,7 @@ class GeminiAIChatService:
         "thinking": (
             "Che do Tu duy (mo hinh can bang):\n"
             "- Tra loi day du cac phan can thiet (ly luan + ket luan + dieu kien/gioi han neu co); khong bo sot y chinh vi muon ngan.\n"
+            "- Tu kiem nhanh: neu hai phan ngu canh mau thuan, neu ro truoc khi ket luan; tranh hop nhat vo ly.\n"
             "- Tu duy noi bo: hieu nguoi dung muon gi va minh dang co loai du lieu gi — chu dong tim trong ngu canh phan tra loi tot nhat, khong can liet ke tung buoc neu khong ich.\n"
             "- Neu nhieu cach hieu: chon cach sat ngu canh nhat; neu van mo thi hoi mot cau truoc khi mo rong.\n"
             "- Phan tich linh hoat: sap xep, so sanh, hoac danh gia rui ro tuy cau hoi; moi y co can cu trong ngu canh.\n"
@@ -396,6 +418,7 @@ class GeminiAIChatService:
         "pro": (
             "Che do Pro (mo hinh suy luan sau):\n"
             "- Tra loi sau, day du: cac nhanh ly luan, bang chung, va ket luan phai du de nguoi dung tin cay; tranh rut gon lam mat tinh thuyet phuc.\n"
+            "- Voi phan tich nhieu buoc: neu ngan cac gia dinh / dieu kien dau vao (neu co) de nguoi dung kiem tra lai duoc.\n"
             "- Dong vai chuyen gia quan tri rui ro tin dung: lam ro pham vi, gia dinh, do tin cay cua ket luan.\n"
             "- Chu dong khai thac toan bo ngu canh: ghep nhieu bang/cot/dong khi co ich; neu co nhieu huong phan tich, chon huong giau thong tin nhat cho cau hoi.\n"
             "- Voi bai toan lon: co the di tu tom tat ngu canh -> bang chung (cot/nguong/so) -> phan tich nguyen nhan & tac dong -> rui ro con lai -> kien nghi; "
@@ -441,6 +464,15 @@ class GeminiAIChatService:
         "- Liet ke: sap xep theo muc lien quan hoac rui ro khi co co so.\n"
         "- Tong hop: ket luan chinh co the dat truoc hoac xen ke voi giai thich tuy do dai — uu tien ro rang, khong ep thu tu may moc.\n"
         "- Nhieu cach dien giai hop ly: chon cach sat nhat voi ngu canh; neu can thi neu gia dinh ngan.\n\n"
+        "Tu duy phan tich nang cao (ngam, khong can trinh bay tung buoc noi bo cho nguoi dung):\n"
+        "- Nhan dien loai cau hoi (tom tat, so sanh, rui ro/canh bao, huong dan thao tac, kiem tra du lieu, hoac nhieu y ket hop) roi chon cau truc tra loi phu hop; "
+        "cau hoi dinh luong thi uu tien tra loi truc tiep con so/ket luan roi giai thich ngan.\n"
+        "- Uu tien 1-3 insight sang nhat dung voi vai tro quan tri rui ro tin dung; tranh lap lai doan mo dau tong quan neu khong them gia tri.\n"
+        "- Phan biet ro: (a) su kien/so lieu lay truc tiep tu ngu canh (b) suy luan hop ly neo vao (a) (c) goi y hanh dong — ghi ro khi chuyen tu (a) sang (b) hoac (c).\n"
+        "- Neu hai bang/khoi du lieu mau thuan hoac thieu khoa lien ket (VD khach vs khoan vay): chi ra, khong gop nham; neu khong chac, noi ro do tin cay thap.\n"
+        "- Voi tien te: neu don vi (VND), do lon (ty/trieu) khi giup doc nhanh; so sanh/xep hang phai noi ro tieu chi va han che.\n"
+        "- Cau hoi nhieu y: tra loi day du tung y (co the tieu de ngan) theo thu tu uu tien cua nguoi dung hoac theo muc rui ro/gia tri nghiep vu.\n"
+        "- Khi ngu canh day: tom tat cau truc du lieu (bang cot chinh, khoang thoi gian) trong 1-2 cau truoc khi di sau — tranh nhet toan bo bang vao cau tra loi neu khong duoc yeu cau.\n\n"
         "Khung tham chieu phan loai no theo quy dinh SBV khi bai toan lien quan den no qua han/no xau:\n"
         "- Co the su dung lam khung phan tich nghiep vu mac dinh khi nguoi dung hoi ve nhom no, no xau, muc do qua han, chat luong tin dung hoac canh bao rui ro lien quan.\n"
         "- Nhom 1 (No du tieu chuan): trong han hoac qua han duoi 10 ngay.\n"
@@ -477,7 +509,8 @@ class GeminiAIChatService:
         "Muc tieu cuoi cung:\n"
         "- Giup nguoi dung hieu du lieu day du, chinh xac (uu tien ro rang hon toc do rut gon).\n"
         "- Lam ro doi tuong, van de, rui ro, nguyen nhan va hanh dong uu tien — khong bo qua buoc quan trong neu ngu canh cho phep ket luan.\n"
-        "- Tra loi vua DUNG vua DAY DU, huu ich va co tinh hanh dong khi thich hop; suy luan sang, sat ngu canh, khong lap khuon co dinh."
+        "- Tra loi vua DUNG vua DAY DU, huu ich va co tinh hanh dong khi thich hop; suy luan sang, sat ngu canh, khong lap khuon co dinh.\n"
+        "- Khi thich hop, ket thuc bang mot cau goi y buoc tiep theo (vi du: bo sung cot, loc tieu chi, doi nguon du lieu) — ngan, khong bat buoc neu cau hoi da du."
     )
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None) -> None:
@@ -810,6 +843,11 @@ class GeminiAIChatService:
                         ),
                         retry_after_seconds=retry_after,
                     ) from exc
+                if _looks_like_service_unavailable(msg):
+                    raise GeminiServiceOverloadedError(
+                        "Model Gemini tạm thời quá tải (503). Vui lòng thử lại sau vài chục giây hoặc chọn model nhẹ hơn (Nhanh).",
+                        retry_after_seconds=45,
+                    ) from exc
                 raise
 
             ai_text = _dedupe_response_text(_extract_text(resp))
@@ -854,6 +892,9 @@ class GeminiAIChatService:
             session.rollback()
             raise
         except GeminiResourceExhaustedError:
+            session.rollback()
+            raise
+        except GeminiServiceOverloadedError:
             session.rollback()
             raise
         except Exception as exc:

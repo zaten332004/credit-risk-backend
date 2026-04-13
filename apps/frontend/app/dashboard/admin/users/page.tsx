@@ -4,9 +4,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { ListSearchInput } from '@/components/list-search-input';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { SegmentedFilter } from '@/components/segmented-filter';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -16,7 +17,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Search, MoreHorizontal, Loader2, RefreshCw, AlertCircle, Download, Trash2 } from 'lucide-react';
+import { MoreHorizontal, Loader2, RefreshCw, AlertCircle, Download, Trash2 } from 'lucide-react';
 import { browserApiFetchAuth } from '@/lib/api/browser';
 import { ApiError } from '@/lib/api/shared';
 import { useI18n } from '@/components/i18n-provider';
@@ -427,37 +428,29 @@ export default function AdminUsersPage() {
 
       <Card className="border-border/80 bg-card shadow-sm">
         <CardHeader className="space-y-3 pb-3">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-            <div>
-              <CardTitle>{t('admin.users.list_title')}</CardTitle>
-              <CardDescription>
-                {t('common.showing')} {filtered.length} {t('admin.users.items')}
-              </CardDescription>
-            </div>
-            <div className="w-full md:w-80">
-              <div className="relative">
-                <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder={t('admin.users.search_ph')}
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
-            </div>
+          <div>
+            <CardTitle>{t('admin.users.list_title')}</CardTitle>
+            <CardDescription>
+              {t('common.showing')} {filtered.length} {t('admin.users.items')}
+            </CardDescription>
           </div>
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-            <Tabs value={scope} onValueChange={setScope}>
-              <TabsList>
-                <TabsTrigger value="all">{t('common.all')}</TabsTrigger>
-                <TabsTrigger value="active">{t('common.active')}</TabsTrigger>
-                <TabsTrigger value="inactive">{t('common.inactive')}</TabsTrigger>
-              </TabsList>
-              <TabsContent value="all" />
-              <TabsContent value="active" />
-              <TabsContent value="inactive" />
-            </Tabs>
-            <div />
+          <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center">
+            <ListSearchInput
+              placeholder={t('admin.users.search_ph')}
+              value={query}
+              onChange={setQuery}
+              aria-label={t('admin.users.search_ph')}
+            />
+            <SegmentedFilter
+              aria-label={t('common.status')}
+              value={scope}
+              onValueChange={setScope}
+              options={[
+                { value: 'all', label: t('common.all') },
+                { value: 'active', label: t('common.active') },
+                { value: 'inactive', label: t('common.inactive') },
+              ]}
+            />
           </div>
         </CardHeader>
         <CardContent className="pt-0">

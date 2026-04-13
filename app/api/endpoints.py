@@ -1,4 +1,5 @@
 import csv
+from datetime import datetime, timezone
 from io import StringIO
 from typing import List, Optional
 
@@ -479,6 +480,72 @@ async def approved_loan_workbench_endpoint(
 ) -> List[ApprovedLoanWorkbenchRow]:
     rows = customer_loan_ops_service.list_approved_loan_workbench(limit=limit)
     return [ApprovedLoanWorkbenchRow.model_validate(r) for r in rows]
+
+
+@router.get("/customers/approved-loan-workbench/export", tags=["customers"])
+async def export_approved_loan_workbench_csv_endpoint(
+    limit: int = 500,
+    current_user: User = Depends(get_current_manager_or_admin_user),
+) -> Response:
+    """CSV export of approved-loan workbench (Manager and Admin only)."""
+    safe_limit = max(1, min(int(limit or 500), 2000))
+    rows = customer_loan_ops_service.list_approved_loan_workbench(limit=safe_limit)
+    buf = StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "application_id",
+            "application_ref_no",
+            "customer_id",
+            "customer_name",
+            "loan_status",
+            "loan_type",
+            "loan_purpose",
+            "loan_amount",
+            "loan_term_months",
+            "interest_rate_pct",
+            "facility_id",
+            "next_installment_no",
+            "next_schedule_id",
+            "next_due_date",
+            "installment_state",
+            "installment_dpd",
+            "next_total_due",
+            "next_paid",
+            "cumulative_paid",
+        ]
+    )
+    for r in rows:
+        writer.writerow(
+            [
+                r.get("application_id"),
+                r.get("application_ref_no") or "",
+                r.get("customer_id") if r.get("customer_id") is not None else "",
+                r.get("customer_name") or "",
+                r.get("loan_status") or "",
+                r.get("loan_type") or "",
+                r.get("loan_purpose") or "",
+                r.get("loan_amount") if r.get("loan_amount") is not None else "",
+                r.get("loan_term") if r.get("loan_term") is not None else "",
+                r.get("interest_rate") if r.get("interest_rate") is not None else "",
+                r.get("facility_id") if r.get("facility_id") is not None else "",
+                r.get("next_installment_no") if r.get("next_installment_no") is not None else "",
+                r.get("next_schedule_id") if r.get("next_schedule_id") is not None else "",
+                r.get("next_due_date") or "",
+                r.get("installment_state") or "",
+                r.get("installment_dpd") if r.get("installment_dpd") is not None else "",
+                r.get("next_total_due") if r.get("next_total_due") is not None else "",
+                r.get("next_paid") if r.get("next_paid") is not None else "",
+                r.get("cumulative_paid") if r.get("cumulative_paid") is not None else "",
+            ]
+        )
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    filename = f"approved-loan-workbench-{ts}.csv"
+    return Response(
+        content=buf.getvalue().encode("utf-8-sig"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post(

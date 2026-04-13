@@ -38,6 +38,11 @@ def public_message_for_exception(exc: BaseException) -> str:
         return "Khóa API Gemini không hợp lệ hoặc chưa được cấu hình. Kiểm tra biến GEMINI_API_KEY (hoặc gemini_api_key) trên máy chủ."
     if "resource has been exhausted" in low or "resource_exhausted" in low or "quota" in low and "exceed" in low:
         return "Đã vượt hạn mức hoặc quota Gemini. Vui lòng thử lại sau hoặc kiểm tra billing trên Google AI."
+    if ("503" in msg and "unavailable" in low) or ("servererror" in low and "503" in msg) or "high demand" in low:
+        return (
+            "Model Gemini tạm thời quá tải (Google trả 503). "
+            "Thường chỉ kéo dài vài phút — vui lòng thử lại sau hoặc chọn model nhẹ hơn."
+        )
     if ("404" in msg or "not found" in low) and "model" in low:
         return "Model AI không tồn tại hoặc không khả dụng với khóa hiện tại. Hãy chọn model khác trong danh sách hoặc cập nhật GEMINI_MODEL."
     if "permission_denied" in low or ("permission" in low and "denied" in low):

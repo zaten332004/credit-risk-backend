@@ -863,6 +863,7 @@ class ApprovedLoanWorkbenchRow(BaseModel):
     loan_purpose: Optional[str] = None
     loan_amount: Optional[float] = None
     loan_term: Optional[int] = None
+    interest_rate: Optional[float] = None
     facility_id: Optional[int] = None
     next_installment_no: Optional[int] = None
     next_schedule_id: Optional[int] = None
@@ -871,6 +872,10 @@ class ApprovedLoanWorkbenchRow(BaseModel):
     installment_dpd: int = 0
     next_total_due: Optional[float] = None
     next_paid: Optional[float] = None
+    cumulative_paid: Optional[float] = Field(
+        default=0.0,
+        description="Sum of Loan_Payment.amount_paid for this loan facility (all installments)",
+    )
 
 
 class EnsureRepaymentScheduleResponse(BaseModel):

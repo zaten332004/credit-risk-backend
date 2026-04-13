@@ -1,0 +1,335 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Plus, Download, Loader2 } from 'lucide-react';
+import { ListSearchInput } from '@/components/list-search-input';
+import { getUserRole } from '@/lib/auth/token';
+import { useI18n } from '@/components/i18n-provider';
+import { browserApiFetchAuth } from '@/lib/api/browser';
+import { notifyError, notifySuccess } from '@/lib/notify';
+import { formatUserFacingApiError } from '@/lib/api/format-api-error';
+import { ListPagination } from '@/components/list-pagination';
+import { getAccessToken } from '@/lib/auth/token';
+import { formatVnd } from '@/lib/money';
+
+function getRiskBadgeClass(level: string) {
+  const normalized = String(level || '').toLowerCase();
+  if (normalized === 'low') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  if (normalized === 'medium') return 'border-blue-200 bg-blue-50 text-blue-700';
+  if (normalized === 'high') return 'border-rose-200 bg-rose-50 text-rose-700';
+  return 'border-slate-200 bg-slate-50 text-slate-700';
+}
+
+function normalizeStatusKey(status: string) {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'approved') return 'status.approved';
+  if (normalized === 'rejected') return 'status.rejected';
+  if (normalized === 'pending') return 'status.pending';
+  if (normalized === 'active') return 'status.active';
+  if (normalized === 'inactive') return 'status.inactive';
+  return null;
+}
+
+function getStatusBadgeClass(status: string) {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'approved') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  if (normalized === 'rejected') return 'border-rose-200 bg-rose-50 text-rose-700';
+  if (normalized === 'pending') return 'border-slate-200 bg-slate-50 text-slate-700';
+  if (normalized === 'active') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  if (normalized === 'inactive') return 'border-slate-200 bg-slate-50 text-slate-700';
+  return 'border-slate-200 bg-slate-50 text-slate-700';
+}
+
+export default function CustomersPage() {
+  const PAGE_SIZE = 15;
+  const { t, locale } = useI18n();
+  const router = useRouter();
+  const role = getUserRole();
+  const isViewer = role === 'viewer';
+  const isAdmin = role === 'admin';
+  const [customers, setCustomers] = useState<Array<{
+    id: string;
+    name: string;
+    email: string;
+    loanType: string;
+    loanAmount: number | null;
+    termMonths: number | null;
+    annualRate: number | null;
+    riskLevel: string;
+    status: string;
+  }>>([]);
+
+  const [search, setSearch] = useState('');
+  const [riskFilter, setRiskFilter] = useState<string>('all');
+  const [isLoading, setIsLoading] = useState(true);
+  const [isExporting, setIsExporting] = useState(false);
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setIsLoading(true);
+      setPage(1);
+      try {
+        const query = new URLSearchParams();
+        query.set('page', '1');
+        if (search.trim()) query.set('search_name', search.trim());
+        if (riskFilter !== 'all') query.set('risk_level', riskFilter);
+        const data = await browserApiFetchAuth<{ items: any[] }>(`/customers?${query.toString()}`, { method: 'GET' });
+        if (cancelled) return;
+        setCustomers(
+          (data.items || []).map((item) => ({
+            id: String(item.customer_id),
+            name: String(item.full_name || '-'),
+            email: String(item.email || '-'),
+            loanType: String(item.loan_type || item.product_type || '-'),
+            loanAmount: item.requested_loan_amount != null ? Number(item.requested_loan_amount) : null,
+            termMonths: item.requested_term_months != null ? Number(item.requested_term_months) : null,
+            annualRate: item.annual_interest_rate != null ? Number(item.annual_interest_rate) : null,
+            riskLevel: String(item.risk_level || 'medium').toLowerCase(),
+            status: String(item.application_status || 'active').toLowerCase(),
+          })),
+        );
+      } catch (err) {
+        if (!cancelled) notifyError(formatUserFacingApiError(err));
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [search, riskFilter]);
+
+  const riskLabel = (level: string) => {
+    switch (level) {
+      case 'low':
+        return t('risk.level.low');
+      case 'medium':
+        return t('risk.level.medium');
+      case 'high':
+        return t('risk.level.high');
+      default:
+        return level;
+    }
+  };
+
+  const loanTypeLabel = (value: string) => {
+    const normalized = String(value || '').toLowerCase();
+    if (normalized === 'secured') return locale === 'vi' ? 'Có tài sản bảo đảm' : 'Secured';
+    if (normalized === 'unsecured') return locale === 'vi' ? 'Tín chấp' : 'Unsecured';
+    if (normalized === 'mortgage') return locale === 'vi' ? 'Thế chấp' : 'Mortgage';
+    if (normalized === 'business') return locale === 'vi' ? 'Kinh doanh' : 'Business';
+    return value || '-';
+  };
+
+  const filteredCustomers = customers;
+  const totalPages = Math.max(1, Math.ceil(filteredCustomers.length / PAGE_SIZE));
+  const pagedCustomers = filteredCustomers.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  const handleExport = async () => {
+    setIsExporting(true);
+    try {
+      const exportRes = await browserApiFetchAuth<{ file_url?: string; url?: string; download_url?: string }>(
+        '/admin/export',
+        {
+          method: 'POST',
+          body: {
+            type: 'customers',
+            filters: {},
+          },
+        },
+      );
+
+      const fileUrl = String(exportRes.file_url || exportRes.url || exportRes.download_url || '').trim();
+      if (!fileUrl) {
+        throw new Error(locale === 'vi' ? 'Không nhận được đường dẫn file export.' : 'No export file URL returned.');
+      }
+
+      const token = getAccessToken();
+      const normalizedPath = (() => {
+        if (fileUrl.startsWith('/api/')) return fileUrl;
+        if (fileUrl.startsWith('/')) return `/api/v1${fileUrl}`;
+        return `/api/v1/${fileUrl}`;
+      })();
+      const response = await fetch(normalizedPath, {
+        method: 'GET',
+        headers: token ? { authorization: `Bearer ${token}` } : undefined,
+      });
+      if (!response.ok) {
+        throw new Error(locale === 'vi' ? 'Tải file export thất bại.' : 'Failed to download export file.');
+      }
+
+      const blob = await response.blob();
+      const disposition = response.headers.get('content-disposition') || '';
+      const matched = disposition.match(/filename="?([^"]+)"?/i);
+      const fallbackName = `customers-export-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`;
+      const fileName = matched?.[1] || fallbackName;
+
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(objectUrl);
+
+      notifySuccess(locale === 'vi' ? 'Đang tải file export.' : 'Downloading export file.');
+    } catch (err) {
+      notifyError(formatUserFacingApiError(err));
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-6 p-6 bg-[#f4f7fc]">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">{t('customers.title')}</h1>
+          <p className="text-muted-foreground mt-2">
+            {t('customers.desc')}
+          </p>
+        </div>
+        {!isViewer && (
+          <div className="flex gap-2">
+            <Button asChild variant="outline">
+              <Link href="/dashboard/upload">
+                {t('sidebar.upload')}
+              </Link>
+            </Button>
+            <Button asChild>
+              <Link href="/dashboard/customers/new">
+                <Plus className="mr-2 h-4 w-4" />
+                {t('customers.add')}
+              </Link>
+            </Button>
+          </div>
+        )}
+      </div>
+
+      <Card className="border-border/80 bg-card shadow-sm">
+        <CardHeader className="pb-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <CardTitle className="mb-0">{t('customers.list_title')}</CardTitle>
+            {isAdmin ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="icon"
+                className="h-9 w-9 shrink-0 rounded-md border border-border bg-muted/80 text-foreground hover:bg-muted"
+                onClick={() => void handleExport()}
+                disabled={isExporting}
+                title={t('sidebar.admin.export')}
+                aria-label={t('sidebar.admin.export')}
+              >
+                {isExporting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                ) : (
+                  <Download className="h-4 w-4" aria-hidden />
+                )}
+              </Button>
+            ) : null}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4 pt-0">
+          <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center">
+            <ListSearchInput
+              placeholder={t('customers.search_ph')}
+              value={search}
+              onChange={setSearch}
+              aria-label={t('customers.search_ph')}
+            />
+            <Select value={riskFilter} onValueChange={setRiskFilter}>
+              <SelectTrigger className="w-full sm:w-[220px] shrink-0">
+                <SelectValue placeholder={t('customers.risk_filter_all')} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{t('customers.risk_filter_all')}</SelectItem>
+                <SelectItem value="low">{t('risk.level.low')}</SelectItem>
+                <SelectItem value="medium">{t('risk.level.medium')}</SelectItem>
+                <SelectItem value="high">{t('risk.level.high')}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="overflow-x-auto rounded-xl border border-black/70 bg-white">
+            <Table className="min-w-[980px] w-full">
+              <TableHeader>
+                <TableRow className="bg-muted/35 hover:bg-muted/35">
+                  <TableHead className="py-1.5">{t('common.name')}</TableHead>
+                  <TableHead className="py-1.5">{t('customers.loan_type')}</TableHead>
+                  <TableHead className="py-1.5">{t('customers.loan_amount')}</TableHead>
+                  <TableHead className="py-1.5">{t('customers.loan_term')}</TableHead>
+                  <TableHead className="py-1.5">{t('customers.interest_rate')}</TableHead>
+                  <TableHead className="py-1.5">{t('customers.risk_level')}</TableHead>
+                  <TableHead className="py-1.5">{t('common.status')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {isLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={7}><Skeleton className="h-6 w-full" /></TableCell>
+                  </TableRow>
+                ) : pagedCustomers.map((customer) => (
+                  <TableRow
+                    key={customer.id}
+                    className="cursor-pointer border-b border-black/15 hover:bg-muted/30"
+                    onClick={() => router.push(`/dashboard/customers/${customer.id}`)}
+                  >
+                    <TableCell className="py-1.5 font-medium">
+                      <div className="leading-tight">
+                        <p>{customer.name}</p>
+                        <p className="text-xs text-muted-foreground">{customer.email}</p>
+                      </div>
+                    </TableCell>
+                    <TableCell className="py-1.5 text-[13px]">{loanTypeLabel(customer.loanType)}</TableCell>
+                    <TableCell className="py-1.5 text-[13px]">{formatVnd(customer.loanAmount, locale === 'vi' ? 'vi' : 'en')}</TableCell>
+                    <TableCell className="py-1.5 text-[13px]">
+                      {customer.termMonths != null ? `${customer.termMonths} ${locale === 'vi' ? 'tháng' : 'months'}` : '-'}
+                    </TableCell>
+                    <TableCell className="py-1.5 text-[13px]">{customer.annualRate != null ? `${customer.annualRate}%` : '-'}</TableCell>
+                    <TableCell className="py-1.5">
+                      <Badge variant="outline" className={getRiskBadgeClass(customer.riskLevel)}>
+                        {riskLabel(customer.riskLevel)}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="py-1.5">
+                      <Badge variant="outline" className={getStatusBadgeClass(customer.status)}>
+                        {normalizeStatusKey(customer.status) ? t(normalizeStatusKey(customer.status) as string) : customer.status}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          <ListPagination page={page} totalPages={totalPages} onPageChange={setPage} />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
