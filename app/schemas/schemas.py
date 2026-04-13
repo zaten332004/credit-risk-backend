@@ -865,6 +865,7 @@ class ApprovedLoanWorkbenchRow(BaseModel):
     loan_term: Optional[int] = None
     facility_id: Optional[int] = None
     next_installment_no: Optional[int] = None
+    next_schedule_id: Optional[int] = None
     next_due_date: Optional[str] = None
     installment_state: Optional[str] = None
     installment_dpd: int = 0

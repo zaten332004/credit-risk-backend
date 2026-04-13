@@ -154,6 +154,22 @@ def _installment_state(db: Session, row: LoanRepaymentScheduleDB, today: date) -
     return {"state": state, "dpd": dpd, "paid": float(paid), "total_due": float(total_due)}
 
 
+def _resolve_default_schedule_id(db: Session, facility_id: int) -> Optional[int]:
+    """First installment for this facility that is not yet fully paid (for payments without schedule_id)."""
+    schedules = (
+        db.query(LoanRepaymentScheduleDB)
+        .filter(LoanRepaymentScheduleDB.facility_id == facility_id)
+        .order_by(LoanRepaymentScheduleDB.installment_no)
+        .all()
+    )
+    today = date.today()
+    for sch in schedules:
+        meta = _installment_state(db, sch, today)
+        if meta["state"] != "paid":
+            return int(sch.schedule_id)
+    return None
+
+
 def list_approved_loan_workbench(limit: int = 500) -> List[Dict[str, Any]]:
     """
     One row per approved/disbursed application with facility + next schedule summary.
@@ -226,6 +242,7 @@ def list_approved_loan_workbench(limit: int = 500) -> List[Dict[str, Any]]:
                     "loan_term": _safe_int(app.loan_term),
                     "facility_id": _safe_int(facility.facility_id) if facility else None,
                     "next_installment_no": _safe_int(next_row.installment_no) if next_row else None,
+                    "next_schedule_id": _safe_int(next_row.schedule_id) if next_row else None,
                     "next_due_date": next_row.due_date.isoformat() if next_row and next_row.due_date else None,
                     "installment_state": next_meta.get("state"),
                     "installment_dpd": installment_dpd,
@@ -302,17 +319,22 @@ def record_loan_payment(
         if not facility:
             raise ValueError("Facility not found")
 
-        if schedule_id is not None:
-            sch = (
-                db.query(LoanRepaymentScheduleDB)
-                .filter(
-                    LoanRepaymentScheduleDB.schedule_id == schedule_id,
-                    LoanRepaymentScheduleDB.facility_id == facility_id,
-                )
-                .first()
+        resolved_schedule_id: Optional[int] = int(schedule_id) if schedule_id is not None else None
+        if resolved_schedule_id is None:
+            resolved_schedule_id = _resolve_default_schedule_id(db, facility_id)
+        if resolved_schedule_id is None:
+            raise ValueError("No repayment installment to allocate this payment to; ensure a schedule exists")
+
+        sch = (
+            db.query(LoanRepaymentScheduleDB)
+            .filter(
+                LoanRepaymentScheduleDB.schedule_id == resolved_schedule_id,
+                LoanRepaymentScheduleDB.facility_id == facility_id,
             )
-            if not sch:
-                raise ValueError("schedule_id does not belong to this facility")
+            .first()
+        )
+        if not sch:
+            raise ValueError("schedule_id does not belong to this facility")
 
         amt = Decimal(str(amount_paid))
         if amt <= 0:
@@ -324,7 +346,7 @@ def record_loan_payment(
 
         row = LoanPaymentDB(
             facility_id=facility_id,
-            schedule_id=schedule_id,
+            schedule_id=resolved_schedule_id,
             payment_date=payment_date,
             amount_paid=amt,
             payment_method=payment_method,
@@ -342,7 +364,7 @@ def record_loan_payment(
             entity_id=row.payment_id,
             new_value={
                 "facility_id": facility_id,
-                "schedule_id": schedule_id,
+                "schedule_id": resolved_schedule_id,
                 "amount_paid": float(amt),
                 "payment_date": payment_date.isoformat(),
             },
