@@ -542,6 +542,8 @@ class CustomerCreate(BaseModel):
 
 
 class CustomerUpdate(BaseModel):
+    """application_id: when set, loan fields / status apply to this Loan_Application (multi-app customers)."""
+    application_id: Optional[int] = None
     full_name: Optional[str] = None
     age: Optional[int] = None
     monthly_income: Optional[float] = None
@@ -584,6 +586,10 @@ class CustomerUpdate(BaseModel):
 class CustomerStatusUpdateBody(BaseModel):
     application_status: str
     rejection_reason: Optional[str] = None
+    application_id: Optional[int] = Field(
+        default=None,
+        description="Target Loan_Application when customer has multiple applications",
+    )
 
     @validator("application_status")
     def application_status_valid(cls, v):
@@ -609,6 +615,8 @@ class CustomerStatusUpdateBody(BaseModel):
 
 class CustomerRead(BaseModel):
     customer_id: int
+    """Loan_Application currently surfaced in this read (detail UI / multi-app)."""
+    application_id: Optional[int] = None
     full_name: str
     age: Optional[int] = None
     monthly_income: Optional[float] = None
@@ -809,6 +817,44 @@ class LoanPaymentRead(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class AdditionalLoanApplicationCreate(BaseModel):
+    requested_loan_amount: float = Field(..., gt=0)
+    requested_term_months: int = Field(..., gt=0, le=360)
+    loan_purpose: str = Field(..., min_length=1)
+    loan_type: Optional[str] = None
+    annual_interest_rate: Optional[float] = Field(default=None, ge=0, le=100)
+    collateral_id: Optional[str] = None
+    collateral_value: Optional[float] = None
+
+
+class LoanPaymentRecordBody(BaseModel):
+    facility_id: int
+    schedule_id: Optional[int] = None
+    payment_date: date
+    amount_paid: float = Field(..., gt=0)
+    payment_method: Optional[str] = None
+    status: Optional[str] = Field(default=None, description="paid|partial|late")
+
+
+class ApprovedLoanWorkbenchRow(BaseModel):
+    application_id: int
+    application_ref_no: Optional[str] = None
+    customer_id: Optional[int] = None
+    customer_name: Optional[str] = None
+    loan_status: Optional[str] = None
+    loan_type: Optional[str] = None
+    loan_purpose: Optional[str] = None
+    loan_amount: Optional[float] = None
+    loan_term: Optional[int] = None
+    facility_id: Optional[int] = None
+    next_installment_no: Optional[int] = None
+    next_due_date: Optional[str] = None
+    installment_state: Optional[str] = None
+    installment_dpd: int = 0
+    next_total_due: Optional[float] = None
+    next_paid: Optional[float] = None
 
 
 # ============================================================================

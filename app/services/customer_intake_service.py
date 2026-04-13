@@ -36,6 +36,7 @@ from app.schemas.schemas import (
     PaginatedCustomers,
 )
 from app.services.audit_service import log_action
+from app.services.repayment_schedule_service import ensure_facility_and_repayment_schedule
 
 
 IMPORT_COLUMN_ALIASES: Dict[str, List[str]] = {
@@ -428,6 +429,15 @@ def _latest_application(customer: CustomerDB) -> Optional[LoanApplicationDB]:
     )[0]
 
 
+def _resolve_application(customer: CustomerDB, application_id: Optional[int]) -> Optional[LoanApplicationDB]:
+    if application_id is None:
+        return None
+    for app in customer.loan_applications or []:
+        if int(app.application_id) == int(application_id):
+            return app
+    return None
+
+
 def _to_customer_read(
     customer: CustomerDB,
     application: Optional[LoanApplicationDB] = None,
@@ -451,6 +461,7 @@ def _to_customer_read(
         )
     return CustomerRead(
         customer_id=customer.customer_id,
+        application_id=int(application.application_id) if application else None,
         full_name=customer.full_name,
         age=customer.age,
         monthly_income=float(customer.monthly_income) if customer.monthly_income is not None else None,
@@ -706,7 +717,7 @@ def list_customers(
         db.close()
 
 
-def get_customer(customer_id: int) -> Optional[CustomerRead]:
+def get_customer(customer_id: int, application_id: Optional[int] = None) -> Optional[CustomerRead]:
     db = SessionLocal()
     try:
         customer = (
@@ -717,11 +728,18 @@ def get_customer(customer_id: int) -> Optional[CustomerRead]:
         )
         if not customer:
             return None
+        if application_id is not None:
+            app = _resolve_application(customer, application_id)
+            if app is None:
+                return None
+        else:
+            app = None
         prediction_snapshot_map = _latest_prediction_snapshot_map(db, [int(customer.customer_id)])
         return _enrich_customer_read(
             db,
             _to_customer_read(
                 customer,
+                application=app,
                 risk_level_override=prediction_snapshot_map.get(int(customer.customer_id), {}).get("risk_level"),
                 risk_score_override=prediction_snapshot_map.get(int(customer.customer_id), {}).get("risk_score"),
             ),
@@ -762,6 +780,14 @@ def create_customer(payload: CustomerCreate, created_by: str, created_by_user_id
             )
             db.add(application)
             db.flush()
+            st_app = _normalize_application_status(application.loan_status)
+            if st_app in {"approved", "disbursed"}:
+                ensure_facility_and_repayment_schedule(
+                    db,
+                    application=application,
+                    customer_id=int(customer.customer_id),
+                )
+                db.flush()
 
         risk_score, risk_level = _create_risk_prediction(db, customer=customer, application=application)
         customer_read = _to_customer_read(
@@ -815,7 +841,13 @@ def update_customer(
         previous_status = _normalize_application_status(before_customer.application_status)
         _apply_customer_payload(customer, payload)
 
-        application = _latest_application(customer)
+        raw_app_id = getattr(payload, "application_id", None)
+        if raw_app_id is not None:
+            application = _resolve_application(customer, int(raw_app_id))
+            if application is None:
+                raise ValueError("application_id not found for this customer")
+        else:
+            application = _latest_application(customer)
         if _has_application_payload(payload):
             if application is None:
                 requested_amount = payload.requested_loan_amount
@@ -852,6 +884,16 @@ def update_customer(
                     payload,
                     customer_id=customer.customer_id,
                     customer_monthly_income=float(customer.monthly_income) if customer.monthly_income is not None else None,
+                )
+                db.flush()
+
+        if application is not None:
+            st_app = _normalize_application_status(application.loan_status)
+            if st_app in {"approved", "disbursed"}:
+                ensure_facility_and_repayment_schedule(
+                    db,
+                    application=application,
+                    customer_id=int(customer.customer_id),
                 )
                 db.flush()
 

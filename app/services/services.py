@@ -1031,7 +1031,7 @@ def list_alerts(status: Optional[str], type_: Optional[str]) -> List[AlertRead]:
         query = (
             db.query(AlertDB)
             .filter(
-                AlertDB.alert_type == "high_pd",
+                AlertDB.alert_type.in_(["high_pd", "overdue", "delinquency"]),
                 AlertDB.severity.in_(["medium", "high", "critical"]),
             )
             .order_by(desc(AlertDB.created_at), desc(AlertDB.alert_id))

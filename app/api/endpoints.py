@@ -56,6 +56,10 @@ from app.schemas.schemas import (
     PasswordResetConfirmBody,
     PasswordResetRequestBody,
     PendingAccountStatusResponse,
+    AdditionalLoanApplicationCreate,
+    ApprovedLoanWorkbenchRow,
+    LoanApplicationRead,
+    LoanPaymentRecordBody,
     PaginatedCustomers,
     PortfolioCompareBody,
     PortfolioCompareResponse,
@@ -95,6 +99,7 @@ from app.services.oauth_service import OAuthService
 from app.services.ai_chat_file_context_service import AIChatFileContextService
 from app.services.audit_service import log_action
 from app.services import customer_intake_service
+from app.services import customer_loan_ops_service
 from app.services import account_pin_service
 from app.services import password_reset_service
 from app.services import profile_service
@@ -458,6 +463,65 @@ async def get_my_avatar(
 # ---------------------------------------------------------------------------
 
 
+@router.get("/customers/approved-loan-workbench", response_model=List[ApprovedLoanWorkbenchRow], tags=["customers"])
+async def approved_loan_workbench_endpoint(
+    limit: int = 500,
+    current_user: User = Depends(get_current_analyst_user),
+) -> List[ApprovedLoanWorkbenchRow]:
+    rows = customer_loan_ops_service.list_approved_loan_workbench(limit=limit)
+    return [ApprovedLoanWorkbenchRow.model_validate(r) for r in rows]
+
+
+@router.get("/customers/{customer_id}/loan-applications", response_model=List[LoanApplicationRead], tags=["customers"])
+async def list_customer_loan_applications_endpoint(
+    customer_id: int,
+    current_user: User = Depends(get_current_analyst_user),
+) -> List[LoanApplicationRead]:
+    return customer_loan_ops_service.list_loan_applications_for_customer(customer_id)
+
+
+@router.post("/customers/{customer_id}/loan-applications", response_model=LoanApplicationRead, status_code=201, tags=["customers"])
+async def create_customer_loan_application_endpoint(
+    customer_id: int,
+    body: AdditionalLoanApplicationCreate,
+    current_user: User = Depends(get_current_analyst_user),
+) -> LoanApplicationRead:
+    try:
+        return customer_loan_ops_service.create_loan_application_for_customer(
+            customer_id,
+            requested_loan_amount=body.requested_loan_amount,
+            requested_term_months=body.requested_term_months,
+            loan_purpose=body.loan_purpose,
+            loan_type=body.loan_type,
+            annual_interest_rate=body.annual_interest_rate,
+            collateral_id=body.collateral_id,
+            collateral_value=body.collateral_value,
+            created_by=current_user.email,
+            created_by_user_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/loan-payments", tags=["customers"])
+async def record_loan_payment_endpoint(
+    body: LoanPaymentRecordBody,
+    current_user: User = Depends(get_current_analyst_user),
+) -> dict:
+    try:
+        return customer_loan_ops_service.record_loan_payment(
+            facility_id=body.facility_id,
+            schedule_id=body.schedule_id,
+            payment_date=body.payment_date,
+            amount_paid=body.amount_paid,
+            payment_method=body.payment_method,
+            status=body.status,
+            recorded_by_user_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.get("/customers", response_model=PaginatedCustomers, tags=["customers"])
 async def list_customers_endpoint(
     page: int = 1,
@@ -473,9 +537,10 @@ async def list_customers_endpoint(
 @router.get("/customers/{customer_id}", response_model=CustomerRead, tags=["customers"])
 async def get_customer_endpoint(
     customer_id: int,
+    application_id: Optional[int] = None,
     current_user: User = Depends(get_current_analyst_user),  # Analyst, Manager, Admin
 ) -> CustomerRead:
-    customer = customer_intake_service.get_customer(customer_id)
+    customer = customer_intake_service.get_customer(customer_id, application_id=application_id)
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
     return customer
@@ -507,12 +572,15 @@ async def update_customer_endpoint(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Analysts cannot change application status; use manager or admin for approval.",
         )
-    updated = customer_intake_service.update_customer(
-        customer_id,
-        body,
-        updated_by=current_user.email,
-        updated_by_user_id=current_user.id,
-    )
+    try:
+        updated = customer_intake_service.update_customer(
+            customer_id,
+            body,
+            updated_by=current_user.email,
+            updated_by_user_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     if not updated:
         raise HTTPException(status_code=404, detail="Customer not found")
     return updated
@@ -524,12 +592,19 @@ async def update_customer_status_endpoint(
     body: CustomerStatusUpdateBody,
     current_user: User = Depends(get_current_manager_or_admin_user),  # Chỉ Manager/Admin
 ) -> CustomerRead:
-    updated = customer_intake_service.update_customer(
-        customer_id,
-        CustomerUpdate(application_status=body.application_status, notes=body.rejection_reason),
-        updated_by=current_user.email,
-        updated_by_user_id=current_user.id,
-    )
+    try:
+        updated = customer_intake_service.update_customer(
+            customer_id,
+            CustomerUpdate(
+                application_status=body.application_status,
+                notes=body.rejection_reason,
+                application_id=body.application_id,
+            ),
+            updated_by=current_user.email,
+            updated_by_user_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     if not updated:
         raise HTTPException(status_code=404, detail="Customer not found")
     return updated
