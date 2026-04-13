@@ -25,6 +25,19 @@ from app.services.customer_intake_service import (
     _create_risk_prediction,
 )
 from app.services.audit_service import log_action
+from app.services.repayment_schedule_service import (
+    ensure_facility_and_repayment_schedule,
+    resolve_approval_anchor_date,
+)
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def list_loan_applications_for_customer(customer_id: int) -> List[LoanApplicationRead]:
@@ -59,8 +72,8 @@ def create_loan_application_for_customer(
     try:
         customer = (
             db.query(CustomerDB)
-            .options(selectinload(CDB.loan_applications))
-            .filter(CDB.customer_id == customer_id)
+            .options(selectinload(CustomerDB.loan_applications))
+            .filter(CustomerDB.customer_id == customer_id)
             .first()
         )
         if not customer:
@@ -160,8 +173,18 @@ def list_approved_loan_workbench(limit: int = 500) -> List[Dict[str, Any]]:
         )
         out: List[Dict[str, Any]] = []
         for app in apps:
-            cid = app.customer_id
             customer = app.customer
+            cid = _safe_int(app.customer_id)
+            if cid is None and customer is not None:
+                cid = _safe_int(getattr(customer, "customer_id", None))
+            if cid is not None:
+                anchor = resolve_approval_anchor_date(db, customer_id=int(cid), application=app)
+                ensure_facility_and_repayment_schedule(
+                    db,
+                    application=app,
+                    customer_id=int(cid),
+                    approval_anchor=anchor,
+                )
             facility = (
                 db.query(LoanFacilityDB)
                 .filter(LoanFacilityDB.application_id == app.application_id)
@@ -188,27 +211,77 @@ def list_approved_loan_workbench(limit: int = 500) -> List[Dict[str, Any]]:
                     next_meta = _installment_state(db, last, today)
                     next_row = last
 
+            dpd_raw = next_meta.get("dpd", 0)
+            installment_dpd = int(_safe_int(dpd_raw) or 0)
             out.append(
                 {
                     "application_id": int(app.application_id),
                     "application_ref_no": app.application_ref_no,
-                    "customer_id": int(cid) if cid is not None else None,
+                    "customer_id": cid,
                     "customer_name": customer.full_name if customer else None,
                     "loan_status": app.loan_status,
                     "loan_type": app.loan_type,
                     "loan_purpose": app.loan_purpose,
                     "loan_amount": float(app.loan_amount) if app.loan_amount is not None else None,
-                    "loan_term": app.loan_term,
-                    "facility_id": int(facility.facility_id) if facility else None,
-                    "next_installment_no": int(next_row.installment_no) if next_row else None,
+                    "loan_term": _safe_int(app.loan_term),
+                    "facility_id": _safe_int(facility.facility_id) if facility else None,
+                    "next_installment_no": _safe_int(next_row.installment_no) if next_row else None,
                     "next_due_date": next_row.due_date.isoformat() if next_row and next_row.due_date else None,
                     "installment_state": next_meta.get("state"),
-                    "installment_dpd": next_meta.get("dpd", 0),
+                    "installment_dpd": installment_dpd,
                     "next_total_due": next_meta.get("total_due"),
                     "next_paid": next_meta.get("paid"),
                 }
             )
+        db.commit()
         return out
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def ensure_repayment_facility_for_application(application_id: int) -> Dict[str, Any]:
+    """
+    Create or load the loan facility + repayment schedule for an approved/disbursed application.
+    Used when the workbench row had no facility_id (e.g. customer_id was missing on first list load).
+    """
+    db = SessionLocal()
+    try:
+        app = (
+            db.query(LoanApplicationDB)
+            .options(selectinload(LoanApplicationDB.customer))
+            .filter(LoanApplicationDB.application_id == application_id)
+            .first()
+        )
+        if not app:
+            raise ValueError("Application not found")
+        st = str(app.loan_status or "").strip().lower()
+        if st not in {"approved", "disbursed"}:
+            raise ValueError("Application is not approved or disbursed")
+        customer = app.customer
+        cid = _safe_int(app.customer_id)
+        if cid is None and customer is not None:
+            cid = _safe_int(getattr(customer, "customer_id", None))
+        if cid is None:
+            raise ValueError(
+                "Application has no customer; link a customer on the profile before recording payments"
+            )
+        anchor = resolve_approval_anchor_date(db, customer_id=int(cid), application=app)
+        fac = ensure_facility_and_repayment_schedule(
+            db,
+            application=app,
+            customer_id=int(cid),
+            approval_anchor=anchor,
+        )
+        if not fac:
+            raise ValueError("Could not create loan facility for this application")
+        db.commit()
+        return {"facility_id": int(fac.facility_id), "application_id": int(application_id)}
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 

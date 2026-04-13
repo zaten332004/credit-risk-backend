@@ -20,12 +20,14 @@ def list_customers(
     limit: int = 20,
     search_name: Optional[str] = None,
     risk_level: Optional[str] = None,
+    application_status: Optional[str] = None,
 ) -> PaginatedCustomers:
     return customer_intake_service.list_customers(
         page=page,
         limit=limit,
         search_name=search_name,
         risk_level=risk_level,
+        application_status=application_status,
     )
 
 

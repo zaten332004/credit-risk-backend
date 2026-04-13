@@ -552,7 +552,7 @@ async def get_powerbi_schema(
         else:
             err_c = (count_resp.get("error") or count_resp.get("body") or "").strip()
             if err_c and name not in errors:
-                errors[name] = err_c[:300]
+                errors[name] = err_c[:1200]
 
         # Sample rows (best-effort; bounded by sample_cap and ExecuteQueries maxRows).
         dax_sample = f"EVALUATE TOPN({sample_cap}, '{escaped}')"
@@ -563,7 +563,7 @@ async def get_powerbi_schema(
         else:
             err = (sample_resp.get("error") or sample_resp.get("body") or "").strip()
             if err:
-                errors[name] = err[:300]
+                errors[name] = err[:1200]
 
         if not columns and rows:
             columns = _infer_column_names_from_sample_rows(rows)

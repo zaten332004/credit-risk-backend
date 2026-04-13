@@ -28,10 +28,17 @@ async def list_customers_endpoint(
     limit: int = 20,
     search_name: Optional[str] = None,
     risk_level: Optional[str] = None,
+    application_status: Optional[str] = None,
     min_pd: Optional[float] = None,  # demo, chưa dùng
     current_user: User = Depends(get_current_active_user),
 ) -> PaginatedCustomers:
-    return customer_service.list_customers(page=page, limit=limit, search_name=search_name, risk_level=risk_level)
+    return customer_service.list_customers(
+        page=page,
+        limit=limit,
+        search_name=search_name,
+        risk_level=risk_level,
+        application_status=application_status,
+    )
 
 
 @router.get("/customers/{customer_id}", response_model=CustomerRead, tags=["customers"])

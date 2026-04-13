@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from io import BytesIO
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 import unicodedata
 
 import pandas as pd
 from sqlalchemy import desc, func, or_
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import Session, selectinload
 
 from app.db.models import (
     AlertDB,
@@ -29,6 +30,7 @@ from app.db.session import SessionLocal
 from app.schemas.schemas import (
     CustomerCreate,
     CustomerHistoryItem,
+    CustomerPortfolioSummary,
     CustomerRead,
     RiskRequest,
     CustomerSearchBody,
@@ -661,11 +663,86 @@ def _deserialize_audit_payload(raw: Optional[str]) -> Dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {"value": loaded}
 
 
+def _summarize_loan_portfolio(customer: CustomerDB) -> Tuple[int, float, Dict[str, int]]:
+    apps = list(customer.loan_applications or [])
+    total = sum(float(a.loan_amount or 0) for a in apps)
+    buckets = {"pending": 0, "approved": 0, "disbursed": 0, "rejected": 0}
+    for a in apps:
+        st = _normalize_application_status(a.loan_status) or "pending"
+        if st in buckets:
+            buckets[st] += 1
+        else:
+            buckets["pending"] += 1
+    return len(apps), float(total), buckets
+
+
+def _customer_ids_with_overdue_installments(db: Session, customer_ids: List[int], today: date) -> Set[int]:
+    ids = [int(x) for x in customer_ids if x is not None]
+    if not ids:
+        return set()
+    facilities = db.query(LoanFacilityDB).filter(LoanFacilityDB.customer_id.in_(ids)).all()
+    if not facilities:
+        return set()
+    fac_by_id: Dict[int, int] = {int(f.facility_id): int(f.customer_id) for f in facilities}
+    fac_ids = list(fac_by_id.keys())
+    schedules = db.query(LoanRepaymentScheduleDB).filter(LoanRepaymentScheduleDB.facility_id.in_(fac_ids)).all()
+    if not schedules:
+        return set()
+    sch_ids = [int(s.schedule_id) for s in schedules]
+    paid_rows = (
+        db.query(LoanPaymentDB.schedule_id, func.coalesce(func.sum(LoanPaymentDB.amount_paid), 0))
+        .filter(LoanPaymentDB.schedule_id.in_(sch_ids))
+        .group_by(LoanPaymentDB.schedule_id)
+        .all()
+    )
+    paid_map: Dict[int, Decimal] = {}
+    for sid, total in paid_rows:
+        if sid is not None:
+            paid_map[int(sid)] = Decimal(str(total or 0))
+
+    overdue_customers: Set[int] = set()
+    for sch in schedules:
+        total_due = Decimal(str(sch.total_due or 0))
+        paid = paid_map.get(int(sch.schedule_id), Decimal("0"))
+        if paid + Decimal("0.001") >= total_due:
+            continue
+        if sch.due_date is not None and sch.due_date < today:
+            cid = fac_by_id.get(int(sch.facility_id))
+            if cid is not None:
+                overdue_customers.add(int(cid))
+    return overdue_customers
+
+
+def _bump_risk_level_for_overdue(base: Optional[str], has_overdue: bool) -> str:
+    b = (base or "medium").strip().lower()
+    if not has_overdue:
+        return b
+    order = {"low": 0, "medium": 1, "high": 2}
+    inv = ("low", "medium", "high")
+    idx = order.get(b, 1)
+    return inv[min(2, idx + 1)]
+
+
+def _customer_read_matches_application_status(item: CustomerRead, normalized: str) -> bool:
+    """Filter list rows: customer has at least one loan application in the given status bucket."""
+    ps = item.portfolio_summary
+    if not ps or ps.application_count <= 0:
+        return normalized == "pending"
+    if normalized == "pending":
+        return ps.pending_count > 0
+    if normalized == "approved":
+        return (ps.approved_count or 0) > 0 or (ps.disbursed_count or 0) > 0
+    if normalized == "rejected":
+        return (ps.rejected_count or 0) > 0
+    return True
+
+
 def list_customers(
     page: int = 1,
     limit: Optional[int] = None,
     search_name: Optional[str] = None,
     risk_level: Optional[str] = None,
+    application_status: Optional[str] = None,
 ) -> PaginatedCustomers:
     db = SessionLocal()
     try:
@@ -684,25 +761,49 @@ def list_customers(
 
         customers = query.order_by(desc(CustomerDB.created_at), desc(CustomerDB.customer_id)).all()
         prediction_snapshot_map = _latest_prediction_snapshot_map(db, [int(c.customer_id) for c in customers if c.customer_id is not None])
-        items = [
-            _to_customer_read(
+        today = date.today()
+        overdue_ids = _customer_ids_with_overdue_installments(
+            db, [int(c.customer_id) for c in customers if c.customer_id is not None], today
+        )
+        items: List[CustomerRead] = []
+        for customer in customers:
+            cid = int(customer.customer_id) if customer.customer_id is not None else None
+            read = _to_customer_read(
                 customer,
-                risk_level_override=(
-                    prediction_snapshot_map.get(int(customer.customer_id), {}).get("risk_level")
-                    if customer.customer_id is not None
-                    else None
-                ),
-                risk_score_override=(
-                    prediction_snapshot_map.get(int(customer.customer_id), {}).get("risk_score")
-                    if customer.customer_id is not None
-                    else None
-                ),
+                risk_level_override=prediction_snapshot_map.get(cid, {}).get("risk_level") if cid is not None else None,
+                risk_score_override=prediction_snapshot_map.get(cid, {}).get("risk_score") if cid is not None else None,
             )
-            for customer in customers
-        ]
+            cnt, tot, bc = _summarize_loan_portfolio(customer)
+            overdue = cid is not None and cid in overdue_ids
+            summary = CustomerPortfolioSummary(
+                application_count=cnt,
+                total_loan_amount=float(round(tot, 2)),
+                pending_count=bc["pending"],
+                approved_count=bc["approved"],
+                disbursed_count=bc["disbursed"],
+                rejected_count=bc["rejected"],
+                has_overdue_installment=overdue,
+            )
+            eff = _bump_risk_level_for_overdue(read.risk_level, overdue)
+            items.append(
+                read.model_copy(
+                    update={
+                        "portfolio_summary": summary,
+                        "list_effective_risk_level": eff,
+                    }
+                )
+            )
+        if application_status:
+            st = str(application_status).strip().lower()
+            if st in {"pending", "approved", "rejected"}:
+                items = [it for it in items if _customer_read_matches_application_status(it, st)]
         if risk_level:
             normalized_risk = risk_level.strip().lower()
-            items = [item for item in items if (item.risk_level or "").lower() == normalized_risk]
+            items = [
+                item
+                for item in items
+                if (item.list_effective_risk_level or item.risk_level or "").lower() == normalized_risk
+            ]
 
         total = len(items)
         safe_page = max(1, page)
@@ -782,10 +883,12 @@ def create_customer(payload: CustomerCreate, created_by: str, created_by_user_id
             db.flush()
             st_app = _normalize_application_status(application.loan_status)
             if st_app in {"approved", "disbursed"}:
+                anchor = application.application_date or datetime.utcnow().date()
                 ensure_facility_and_repayment_schedule(
                     db,
                     application=application,
                     customer_id=int(customer.customer_id),
+                    approval_anchor=anchor,
                 )
                 db.flush()
 
@@ -848,6 +951,7 @@ def update_customer(
                 raise ValueError("application_id not found for this customer")
         else:
             application = _latest_application(customer)
+        prev_application_status: Optional[str] = None
         if _has_application_payload(payload):
             if application is None:
                 requested_amount = payload.requested_loan_amount
@@ -879,6 +983,7 @@ def update_customer(
                 else:
                     application = None
             if application is not None:
+                prev_application_status = _normalize_application_status(application.loan_status)
                 _apply_application_payload(
                     application,
                     payload,
@@ -890,10 +995,14 @@ def update_customer(
         if application is not None:
             st_app = _normalize_application_status(application.loan_status)
             if st_app in {"approved", "disbursed"}:
+                anchor: Optional[date] = None
+                if prev_application_status is not None and prev_application_status not in {"approved", "disbursed"}:
+                    anchor = datetime.utcnow().date()
                 ensure_facility_and_repayment_schedule(
                     db,
                     application=application,
                     customer_id=int(customer.customer_id),
+                    approval_anchor=anchor,
                 )
                 db.flush()
 
@@ -1065,10 +1174,18 @@ def delete_customer(customer_id: int, deleted_by_user_id: Optional[int] = None) 
 def advanced_customer_search(body: CustomerSearchBody) -> PaginatedCustomers:
     search_name = None
     risk_level = None
+    application_status = None
     if isinstance(body.filters, dict):
         search_name = body.filters.get("search_name") or body.filters.get("full_name")
         risk_level = body.filters.get("risk_level")
-    return list_customers(page=body.page, limit=body.limit, search_name=search_name, risk_level=risk_level)
+        application_status = body.filters.get("application_status")
+    return list_customers(
+        page=body.page,
+        limit=body.limit,
+        search_name=search_name,
+        risk_level=risk_level,
+        application_status=application_status,
+    )
 
 
 def _read_dataframe(filename: str, content: bytes) -> pd.DataFrame:

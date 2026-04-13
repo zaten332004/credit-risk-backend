@@ -397,12 +397,14 @@ def list_customers(
     limit: int = 20,
     search_name: Optional[str] = None,
     risk_level: Optional[str] = None,
+    application_status: Optional[str] = None,
 ) -> PaginatedCustomers:
     return customer_intake_service.list_customers(
         page=page,
         limit=limit,
         search_name=search_name,
         risk_level=risk_level,
+        application_status=application_status,
     )
 
 
@@ -1682,6 +1684,32 @@ def list_upload_history(user_id: Optional[int], limit: int = 5) -> List[Dict[str
                 }
             )
         return result
+    finally:
+        db.close()
+
+
+def delete_upload_history_item(audit_id: int, acting_user_id: Optional[int], acting_role: Optional[str]) -> bool:
+    """Delete a CustomerImport audit row (upload history). Admin/manager: any row; others: own rows only."""
+    db = SessionLocal()
+    try:
+        q = db.query(AuditLogDB).filter(
+            AuditLogDB.audit_id == audit_id,
+            AuditLogDB.entity_type == "CustomerImport",
+        )
+        role = (acting_role or "").strip().lower()
+        if role not in {"admin", "manager"}:
+            if acting_user_id is None:
+                return False
+            q = q.filter(AuditLogDB.user_id == acting_user_id)
+        row = q.first()
+        if row is None:
+            return False
+        db.delete(row)
+        db.commit()
+        return True
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 

@@ -58,6 +58,7 @@ from app.schemas.schemas import (
     PendingAccountStatusResponse,
     AdditionalLoanApplicationCreate,
     ApprovedLoanWorkbenchRow,
+    EnsureRepaymentScheduleResponse,
     LoanApplicationRead,
     LoanPaymentRecordBody,
     PaginatedCustomers,
@@ -461,6 +462,8 @@ async def get_my_avatar(
 # ---------------------------------------------------------------------------
 # Group 1: Customers
 # ---------------------------------------------------------------------------
+# Static paths like /customers/approved-loan-workbench MUST stay above
+# /customers/{customer_id}; otherwise "approved-loan-workbench" is parsed as int and clients get 422.
 
 
 @router.get("/customers/approved-loan-workbench", response_model=List[ApprovedLoanWorkbenchRow], tags=["customers"])
@@ -470,6 +473,22 @@ async def approved_loan_workbench_endpoint(
 ) -> List[ApprovedLoanWorkbenchRow]:
     rows = customer_loan_ops_service.list_approved_loan_workbench(limit=limit)
     return [ApprovedLoanWorkbenchRow.model_validate(r) for r in rows]
+
+
+@router.post(
+    "/customers/loan-applications/{application_id}/ensure-repayment-schedule",
+    response_model=EnsureRepaymentScheduleResponse,
+    tags=["customers"],
+)
+async def ensure_repayment_schedule_for_application_endpoint(
+    application_id: int,
+    current_user: User = Depends(get_current_analyst_user),
+) -> EnsureRepaymentScheduleResponse:
+    try:
+        data = customer_loan_ops_service.ensure_repayment_facility_for_application(application_id)
+        return EnsureRepaymentScheduleResponse.model_validate(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/customers/{customer_id}/loan-applications", response_model=List[LoanApplicationRead], tags=["customers"])
@@ -528,10 +547,17 @@ async def list_customers_endpoint(
     limit: Optional[int] = None,
     search_name: Optional[str] = None,
     risk_level: Optional[str] = None,
+    application_status: Optional[str] = None,
     min_pd: Optional[float] = None,  # demo, chưa dùng
     current_user: User = Depends(get_current_analyst_user),  # Analyst, Manager, Admin
 ) -> PaginatedCustomers:
-    return customer_intake_service.list_customers(page=page, limit=limit, search_name=search_name, risk_level=risk_level)
+    return customer_intake_service.list_customers(
+        page=page,
+        limit=limit,
+        search_name=search_name,
+        risk_level=risk_level,
+        application_status=application_status,
+    )
 
 
 @router.get("/customers/{customer_id}", response_model=CustomerRead, tags=["customers"])
@@ -1346,4 +1372,21 @@ async def upload_history_endpoint(
     user_filter = None if current_user.role in {"admin", "manager"} else current_user.id
     rows = services.list_upload_history(user_id=user_filter, limit=limit)
     return [UploadHistoryItemRead(**row) for row in rows]
+
+
+@router.delete("/upload/history/{audit_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["ingestion"])
+async def delete_upload_history_endpoint(
+    audit_id: int,
+    current_user: User = Depends(get_current_approved_user),
+) -> Response:
+    if (current_user.role or "").lower() == "viewer":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed")
+    ok = services.delete_upload_history_item(
+        audit_id,
+        acting_user_id=current_user.id,
+        acting_role=current_user.role,
+    )
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload history entry not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 

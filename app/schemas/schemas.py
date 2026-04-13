@@ -613,6 +613,18 @@ class CustomerStatusUpdateBody(BaseModel):
         return v
 
 
+class CustomerPortfolioSummary(BaseModel):
+    """Aggregates all loan applications for a customer (populated on list endpoints)."""
+
+    application_count: int = 0
+    total_loan_amount: float = 0.0
+    pending_count: int = 0
+    approved_count: int = 0
+    disbursed_count: int = 0
+    rejected_count: int = 0
+    has_overdue_installment: bool = False
+
+
 class CustomerRead(BaseModel):
     customer_id: int
     """Loan_Application currently surfaced in this read (detail UI / multi-app)."""
@@ -660,6 +672,9 @@ class CustomerRead(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime] = None
     employments: List[CustomerEmploymentRead] = []
+    portfolio_summary: Optional[CustomerPortfolioSummary] = None
+    """Effective risk for list UI / risk filter when overdue installments bump the level."""
+    list_effective_risk_level: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -855,6 +870,11 @@ class ApprovedLoanWorkbenchRow(BaseModel):
     installment_dpd: int = 0
     next_total_due: Optional[float] = None
     next_paid: Optional[float] = None
+
+
+class EnsureRepaymentScheduleResponse(BaseModel):
+    facility_id: int
+    application_id: int
 
 
 # ============================================================================

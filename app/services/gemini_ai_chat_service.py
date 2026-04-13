@@ -188,6 +188,8 @@ def _parse_ai_data_source(customer_context: Optional[Dict]) -> Optional[str]:
         return "powerbi"
     if s in ("alerts", "alert", "canh_bao", "danh_muc_alerts", "alert_list"):
         return "alerts"
+    if s in ("none", "off", "general", "no", "no_context", "chat_only", "khong", "khong_nguon"):
+        return "none"
     return "portfolio"
 
 
@@ -608,6 +610,9 @@ class GeminiAIChatService:
 
             if not skip_data_context:
                 if ai_src == "upload":
+                    data_context = ""
+                    context_source = ""
+                elif ai_src == "none":
                     data_context = ""
                     context_source = ""
                 elif ai_src == "customer":
