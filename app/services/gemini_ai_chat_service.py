@@ -276,9 +276,61 @@ def _sanitize_system_context(raw_context: str, source: str) -> str:
 
 
 _CTX_ACK_MODEL_VI = (
-    "Đã tiếp nhận. Tôi chỉ tham chiếu nội dung này—không nhắc lại nguyên văn các đoạn dài, "
+    "Received — I will only reference this context; I will not dump long verbatim tables/lists "
+    "unless you ask for quotes or something materially changed. "
+    "Đã tiếp nhận — tôi chỉ tham chiếu nội dung này, không nhắc lại nguyên văn các đoạn dài, "
     "danh sách hay bảng số trừ khi bạn yêu cầu trích dẫn hoặc có thay đổi mới."
 )
+
+
+def _detect_user_question_language(text: str) -> Optional[str]:
+    """
+    Infer language of the user's question for reply-language hints.
+    Returns 'vi' if Vietnamese script (tone marks / đ) is present, or common Vietnamese
+    phrases without diacritics; else 'en' if there is Latin text; else None.
+    """
+    s = (text or "").strip()
+    if not s:
+        return None
+    if re.search(
+        r"[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơớờởỡợùúủũụưừứửữựỳýỷỹỵđ"
+        r"ÀÁẢÃẠĂẰẮẲẴẶÂẦẤẨẪẬÈÉẺẼẸÊỀẾỂỄỆÌÍỈĨỊÒÓỎÕỌÔỒỐỔỖỘƠỚỜỞỠỢÙÚỦŨỤƯỪỨỬỮỰỲÝỶỸỴĐ]",
+        s,
+    ):
+        return "vi"
+    low = s.lower()
+    # Typing without diacritics — still treat as Vietnamese when clearly so.
+    _vi_ascii_markers = (
+        "ngan hang",
+        "tin dung",
+        "khoan vay",
+        "khach hang",
+        "danh muc",
+        "du lieu",
+        "bao cao",
+        "rui ro",
+        "canh bao",
+        "no xau",
+        "qua han",
+        "hop dong",
+        "phan tich",
+        "tong hop",
+        "hay cho",
+        "hay giup",
+        "gia tri",
+        "the nao",
+        "vi sao",
+        "cua toi",
+        "cho toi",
+        "giup toi",
+        "lam on",
+        "xin ",
+    )
+    if any(m in low for m in _vi_ascii_markers):
+        return "vi"
+    if re.search(r"[A-Za-z]", s):
+        return "en"
+    return None
 
 
 def _dedupe_response_text(text: str) -> str:
@@ -483,14 +535,20 @@ class GeminiAIChatService:
         "- Khi du lieu co truong so ngay qua han, hay uu tien anh xa vao 5 nhom no nay truoc khi dua ra nhan dinh rui ro.\n"
         "- Khi du lieu khong du de phan nhom chinh xac, hay noi ro rang du lieu con thieu va tranh gan nhom no mot cach vo can cu.\n"
         "- Neu co su khac biet giua quy tac nghiep vu do nguoi dung cung cap va du lieu thuc te, hay neu ro gia dinh dang duoc ap dung trong phan tich.\n\n"
-        "Nguyen tac trinh bay:\n"
-        "- Tra loi bang tieng Viet tu nhien, ro rang, de doc.\n"
-        "- Bat buoc viet day du dau thanh tieng Viet (a/ă/â, e/ê, o/ô/ơ, u/ư, d/d) va dau cau hop ly (.,;:?!…). "
+        "Nguyen tac trinh bay va ngon ngu:\n"
+        "- QUY TAC BAT BUOC (uu tien rat cao): Xac dinh ngon ngu cua cau hoi/tin nhan nguoi dung gan nhat. "
+        "Neu ho viet bang tieng Viet thi TOAN BO phan tra loi hien thi cho nguoi dung phai bang tieng Viet (day du dau thanh). "
+        "Neu ho viet bang tieng Anh thi TOAN BO phan tra loi hien thi cho nguoi dung phai bang tieng Anh. "
+        "Khong mac dinh tieng Viet khi cau hoi la tieng Anh; khong doi sang tieng Anh khi cau hoi ro rang la tieng Viet. "
+        "Chi dung song song EN+VI khi nguoi dung yeu cau ro rang hoac noi dung hon hop buoc phai lam ro cho hai nhom.\n"
+        "- Khi viet tieng Viet: tu nhien, ro rang, day du dau thanh (a/ă/â, e/ê, o/ô/ơ, u/ư, d/d) va dau cau hop ly (.,;:?!…). "
         "Phan huong dan he thong phia tren co the viet khong dau de giam do dai; ban KHONG duoc bat chuoc kieu khong dau "
-        "khi tra loi nguoi dung.\n"
+        "khi tra loi bang tieng Viet cho nguoi dung.\n"
+        "- Khi viet tieng Anh: ro rang, chuyen nghiep, tranh chen tieng Viet khong can thiet (tru thuat ngu nghiep vu/thuat ngu "
+        "dinh danh bat buoc giu nguyen trong ngu canh).\n"
         "- Duoc phep dung tieu de ngan, danh sach, bang tom tat ngat doan hop ly khi giup de hieu hon.\n"
         "- Co the dung giong van chuyen nghiep nhung khong quan lieu, khong lan man.\n"
-        "- Khong lap lai cac cau mo dau may moc nhu 'Chao ban' o moi lan tra loi, tru khi thuc su can thiet cho ngu canh.\n"
+        "- Khong lap lai cac cau mo dau may moc nhu 'Chao ban' / 'Hello' o moi lan tra loi, tru khi thuc su can thiet cho ngu canh.\n"
         "- Tranh lap lai nguyen van cung mot doan danh sach, cung mot bang so lieu, hoac cung mot khoi 'du lieu thieu' "
         "o nhieu lan tra loi lien tiep neu noi dung khong doi; chi nhac lai khi co thong tin moi hoac nguoi dung yeu cau tom tat/trich dan.\n"
         "- Uu tien day du va dung hon la rut ngan: cau hoi don gian van phai du cac y can thiet; cau hoi phuc tap thi mo rong phan tich, tranh lap vo nghia.\n\n"
@@ -798,6 +856,17 @@ class GeminiAIChatService:
                 user_text = "[THONG TIN KHACH HANG BO SUNG]\n" + additional_customer_context + "\n\n" + user_text
 
             data_hints: List[str] = []
+            q_lang = _detect_user_question_language(message)
+            if q_lang == "vi":
+                data_hints.append(
+                    "BAT BUOC (ngon ngu): Cau hoi cua nguoi dung la tieng Viet — toan bo phan tra loi hien thi cho ho phai bang "
+                    "tieng Viet, day du dau thanh. Khong tra loi bang tieng Anh (tru trich dan/thuat ngu rieng bat buoc tu ngu canh)."
+                )
+            elif q_lang == "en":
+                data_hints.append(
+                    "MANDATORY (language): The user's question is in English — your entire user-visible reply must be in English. "
+                    "Do not answer in Vietnamese except for unavoidable proper nouns or verbatim quotes from context."
+                )
             if uploaded_now.strip():
                 data_hints.append(
                     "Trong yeu cau nay co [FILE DINH KEM]: bat buoc tra loi dua tren noi dung file; "
@@ -845,6 +914,7 @@ class GeminiAIChatService:
                     ) from exc
                 if _looks_like_service_unavailable(msg):
                     raise GeminiServiceOverloadedError(
+                        "Gemini is temporarily overloaded (503). Please retry in ~30–60s or switch to a lighter model (Fast). "
                         "Model Gemini tạm thời quá tải (503). Vui lòng thử lại sau vài chục giây hoặc chọn model nhẹ hơn (Nhanh).",
                         retry_after_seconds=45,
                     ) from exc
@@ -854,7 +924,10 @@ class GeminiAIChatService:
             if ai_text:
                 ai_text = unicodedata.normalize("NFC", ai_text)
             if not ai_text:
-                ai_text = "Minh chua nhan duoc noi dung tra loi tu mo hinh. Ban thu lai giup minh nhe."
+                ai_text = (
+                    "I did not receive a reply from the model. Please try again. "
+                    "Mình chưa nhận được nội dung trả lời từ mô hình. Bạn thử lại giúp mình nhé."
+                )
 
             prior_rows = (
                 session.query(ChatHistoryDB)
