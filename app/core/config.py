@@ -71,14 +71,14 @@ class Settings(BaseSettings):
     power_bi_ai_context_dax: str = ""
     # Contract / sampling hub table (align with loan portfolio semantic model, not AI_Context).
     power_bi_ai_context_table: str = "LoanPortfolio"
-    power_bi_ai_context_max_rows: int = 200
-    power_bi_ai_context_max_chars: int = 4000
+    power_bi_ai_context_max_rows: int = 150
+    power_bi_ai_context_max_chars: int = 10000
     # all_tables|contract_table
     power_bi_ai_context_mode: str = "all_tables"
     # Department-style facts/dims (customer / loans / collateral), similar to loan_dataset CSV domains.
     power_bi_ai_context_tables: str = "CustomerMaster,LoanPortfolio,CollateralRegister"
     power_bi_ai_context_max_tables: int = 12
-    power_bi_ai_context_max_columns: int = 8
+    power_bi_ai_context_max_columns: int = 100
     # Optional comma-separated keys to warn if missing on contract_table (empty = skip check).
     power_bi_ai_context_required_keys: str = ""
     # Power BI /schema preview: max rows returned in sample_rows (total row count uses COUNTROWS separately).

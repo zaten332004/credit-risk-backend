@@ -28,6 +28,8 @@ from app.db.session import Base
 
 logger = logging.getLogger(__name__)
 
+_POWERBI_AI_CONTEXT_MAX_ROWS_HARD_CAP = 150
+
 
 def _safe_int(val: object) -> Optional[int]:
     try:
@@ -60,6 +62,14 @@ def _format_number(val: object) -> str:
         return f"{val:,.4f}".rstrip("0").rstrip(".")
     s = str(val).strip()
     return s
+
+
+def _resolve_powerbi_ai_context_max_rows(default: int = 150) -> int:
+    """
+    Resolve configured row budget with a hard safety cap.
+    """
+    rows = _safe_int(getattr(settings, "power_bi_ai_context_max_rows", default)) or default
+    return max(1, min(rows, _POWERBI_AI_CONTEXT_MAX_ROWS_HARD_CAP))
 
 
 def _extract_execute_queries_rows(result: dict) -> List[dict]:
@@ -242,6 +252,34 @@ def _manual_table_names_for_probe(runtime_user: Optional[Any] = None) -> List[st
             ]
         )
     return _extract_manual_table_names(None)
+
+
+def _prioritize_runtime_table_hints(discovered: List[str], runtime_user: Optional[Any]) -> List[str]:
+    """
+    If the user has entered table hints in UI, use those hints as the primary table list
+    (preserve UI order). When possible, map hints to discovered table casing.
+    """
+    if runtime_user is None:
+        return _dedupe_keep_order(discovered)
+
+    hints = _manual_table_names_for_probe(runtime_user)
+    if not hints:
+        return _dedupe_keep_order(discovered)
+
+    discovered_map: Dict[str, str] = {}
+    for name in discovered:
+        key = str(name or "").strip().lower()
+        if key and key not in discovered_map:
+            discovered_map[key] = name
+
+    prioritized: List[str] = []
+    for hint in hints:
+        key = hint.strip().lower()
+        if not key:
+            continue
+        prioritized.append(discovered_map.get(key, hint))
+
+    return _dedupe_keep_order(prioritized)
 
 
 def _build_auto_table_candidates() -> List[str]:
@@ -472,14 +510,13 @@ def _powerbi_schema_attempt_hints(tables_resp: Dict[str, Any]) -> str:
 
 
 def _get_all_tables_context_from_powerbi(powerbi_service, runtime_user: Optional[Any] = None) -> str:
-    max_chars = _safe_int(getattr(settings, "power_bi_ai_context_max_chars", 4000)) or 4000
+    max_chars = _safe_int(getattr(settings, "power_bi_ai_context_max_chars", 10000)) or 10000
     max_tables = _safe_int(getattr(settings, "power_bi_ai_context_max_tables", 12)) or 12
-    max_columns = _safe_int(getattr(settings, "power_bi_ai_context_max_columns", 8)) or 8
-    max_rows = _safe_int(getattr(settings, "power_bi_ai_context_max_rows", 200)) or 200
+    max_columns = _safe_int(getattr(settings, "power_bi_ai_context_max_columns", 100)) or 100
+    max_rows = _resolve_powerbi_ai_context_max_rows(default=150)
 
     max_tables = max(1, max_tables)
     max_columns = max(1, max_columns)
-    max_rows = max(1, min(max_rows, 50))  # avoid oversized prompt/query
 
     if runtime_user is not None:
         tables_resp = powerbi_service.get_dataset_tables_verbose(runtime_user)
@@ -542,7 +579,7 @@ def _get_all_tables_context_from_powerbi(powerbi_service, runtime_user: Optional
 
     if not table_names:
         return "--- Power BI (all tables) ---\n(No tables discovered from dataset)"
-    table_names = _dedupe_keep_order(table_names)
+    table_names = _prioritize_runtime_table_hints(table_names, runtime_user)
 
     samples: List[Tuple[str, List[dict], List[Tuple[str, str]]]] = []
     failed_tables: List[Tuple[str, str]] = []
@@ -945,9 +982,7 @@ def get_analysis_context_powerbi(runtime_user: Optional[Any] = None) -> str:
         if not dax:
             # contract_table mode: fixed hub table (default LoanPortfolio, override via POWER_BI_AI_CONTEXT_TABLE)
             table_name = (settings.power_bi_ai_context_table or "LoanPortfolio").strip() or "LoanPortfolio"
-            max_rows = int(getattr(settings, "power_bi_ai_context_max_rows", 200) or 200)
-            if max_rows <= 0:
-                max_rows = 200
+            max_rows = _resolve_powerbi_ai_context_max_rows(default=150)
             escaped_table = table_name.replace("'", "''")
             dax = f"EVALUATE TOPN({max_rows}, '{escaped_table}', '{escaped_table}'[Key], ASC)"
 
@@ -959,7 +994,7 @@ def get_analysis_context_powerbi(runtime_user: Optional[Any] = None) -> str:
             table_name = (settings.power_bi_ai_context_table or "LoanPortfolio").strip() or "LoanPortfolio"
             required_raw = (settings.power_bi_ai_context_required_keys or "").strip()
             required_keys = [k.strip() for k in required_raw.split(",") if k.strip()]
-            max_chars = _safe_int(getattr(settings, "power_bi_ai_context_max_chars", 4000)) or 4000
+            max_chars = _safe_int(getattr(settings, "power_bi_ai_context_max_chars", 10000)) or 10000
 
             rows = _extract_execute_queries_rows(result.get("result") or {})
             return _format_ai_context_rows(rows=rows, table_name=table_name, required_keys=required_keys, max_chars=max_chars)
