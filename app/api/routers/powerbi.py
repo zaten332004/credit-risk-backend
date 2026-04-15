@@ -19,6 +19,7 @@ from app.services.analytics_data_service import (
     _infer_column_names_from_sample_rows,
     _scalar_int_from_first_row,
     _safe_int,
+    _strip_table_prefix,
 )
 
 router = APIRouter(prefix="/powerbi", tags=["Power BI Integration"])
@@ -460,6 +461,56 @@ def _escape_dax_table_name(name: str) -> str:
     return (name or "").replace("'", "''")
 
 
+def _normalize_schema_sample_rows(rows: List[Dict[str, Any]], columns: List[str]) -> List[Dict[str, Any]]:
+    """
+    Align sample row keys with schema column names for frontend rendering.
+    Power BI executeQueries may return keys like `Table[Column]` while schema
+    columns are often `Column`.
+    """
+    if not rows or not columns:
+        return rows
+
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        exact_map: Dict[str, Any] = {}
+        folded_map: Dict[str, Any] = {}
+        for raw_key, val in row.items():
+            raw = str(raw_key or "").strip()
+            if not raw:
+                continue
+            stripped = _strip_table_prefix(raw).strip()
+
+            # Keep first occurrence for deterministic results.
+            if raw not in exact_map:
+                exact_map[raw] = val
+            if stripped and stripped not in exact_map:
+                exact_map[stripped] = val
+
+            raw_l = raw.lower()
+            stripped_l = stripped.lower() if stripped else ""
+            if raw_l and raw_l not in folded_map:
+                folded_map[raw_l] = val
+            if stripped_l and stripped_l not in folded_map:
+                folded_map[stripped_l] = val
+
+        normalized: Dict[str, Any] = {}
+        for col in columns:
+            key = str(col or "").strip()
+            if not key:
+                continue
+            if key in exact_map:
+                normalized[key] = exact_map[key]
+            else:
+                normalized[key] = folded_map.get(key.lower())
+
+        out.append(normalized)
+
+    return out
+
+
 def _manual_powerbi_table_names() -> List[str]:
     raw = (getattr(settings, "power_bi_ai_context_tables", "") or "").strip()
     names = [item.strip() for item in raw.split(",") if item.strip()]
@@ -567,6 +618,7 @@ async def get_powerbi_schema(
 
         if not columns and rows:
             columns = _infer_column_names_from_sample_rows(rows)
+        rows = _normalize_schema_sample_rows(rows, columns)
 
         col_count = len(columns) if columns else None
 
