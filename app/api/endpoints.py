@@ -11,6 +11,7 @@ from app.core.security import (
     authenticate_user,
     authenticate_user_by_username_or_email,
     create_access_token,
+    get_current_user,
     get_current_active_user,
     get_current_approved_user,
     get_current_admin_user,
@@ -109,6 +110,14 @@ from app.services import services
 
 router = APIRouter()
 
+
+def _account_disabled_detail() -> dict:
+    return {
+        "code": "ACCOUNT_DISABLED",
+        "message": "Account is disabled",
+        "is_active": False,
+    }
+
 # Kept short for UI toasts; full troubleshooting: shared UPLOAD_JOBS_STORAGE_DIR, single worker, job TTL.
 UPLOAD_JOB_CONTENT_NOT_FOUND_DETAIL = (
     "Không tìm thấy nội dung upload cho job. · "
@@ -150,6 +159,11 @@ async def login_for_access_token_endpoint(body: LoginRequest) -> Token:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username/email or password"
         )
+    if not bool(user_dict.get("is_active", True)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_account_disabled_detail(),
+        )
     
     access_token = create_access_token(
         data={
@@ -167,6 +181,7 @@ async def login_for_access_token_endpoint(body: LoginRequest) -> Token:
         role=user_dict.get("role", "viewer"),
         status=user_dict.get("status", "pending"),
         has_pin=bool(user_dict.get("has_pin")),
+        is_active=bool(user_dict.get("is_active", True)),
     )
 
 
@@ -176,7 +191,13 @@ async def login_with_google(
     db: Session = Depends(get_db),
 ) -> Token:
     try:
-        return OAuthService.login_with_google(db, body.token)
+        token = OAuthService.login_with_google(db, body.token)
+        if not token.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=_account_disabled_detail(),
+            )
+        return token
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -187,7 +208,13 @@ async def login_with_github(
     db: Session = Depends(get_db),
 ) -> Token:
     try:
-        return OAuthService.login_with_github(db, body.token)
+        token = OAuthService.login_with_github(db, body.token)
+        if not token.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=_account_disabled_detail(),
+            )
+        return token
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -287,7 +314,7 @@ async def reject_pin_reset_request_endpoint(
 
 @router.get("/auth/pending/status", response_model=PendingAccountStatusResponse, tags=["auth"])
 async def get_pending_status_endpoint(
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PendingAccountStatusResponse:
     try:
@@ -1082,6 +1109,22 @@ async def admin_update_user_status_endpoint(
         "message": "User status updated successfully",
         "user_id": user_id,
         "is_active": is_active,
+        "status": updated.status,
+    }
+
+
+@router.patch("/admin/users/{user_id}/activate", tags=["admin"])
+async def admin_activate_user_endpoint(
+    user_id: int,
+    current_user: User = Depends(get_current_admin_user),
+) -> dict:
+    updated = services.set_user_active(user_id, is_active=True, actor_user_id=current_user.id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {
+        "message": "User activated successfully",
+        "user_id": user_id,
+        "is_active": True,
         "status": updated.status,
     }
 

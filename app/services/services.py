@@ -359,6 +359,11 @@ def _is_user_active(status: Optional[str]) -> bool:
 
 def _to_user_read(user: UserDB, role_name: Optional[str] = None) -> UserRead:
     resolved_role = _resolve_user_role(user, role_name)
+    is_active = getattr(user, "is_active", None)
+    if is_active is None:
+        is_active = _is_user_active(user.status)
+    elif str((user.status or "")).strip().lower() == "disabled":
+        is_active = False
     return UserRead(
         user_id=user.user_id,
         username=user.username,
@@ -367,7 +372,7 @@ def _to_user_read(user: UserDB, role_name: Optional[str] = None) -> UserRead:
         full_name=user.full_name,
         role=resolved_role,
         status=user.status,
-        is_active=_is_user_active(user.status),
+        is_active=bool(is_active),
         has_pin=bool((user.pin_hash or "").strip()),
         created_at=user.created_at,
         rejection_reason=(user.rejection_reason or "").strip() or None,
@@ -1303,7 +1308,12 @@ def set_user_active(user_id: int, is_active: bool, actor_user_id: Optional[int] 
         if not row:
             return None
 
-        old_state = {"status": row.status, "updated_at": row.updated_at}
+        old_state = {
+            "status": row.status,
+            "is_active": getattr(row, "is_active", True),
+            "updated_at": row.updated_at,
+        }
+        row.is_active = is_active
         row.status = "approved" if is_active else "disabled"
         row.updated_at = _now()
         log_action(
@@ -1313,7 +1323,11 @@ def set_user_active(user_id: int, is_active: bool, actor_user_id: Optional[int] 
             entity_type="User",
             entity_id=row.user_id,
             old_value=old_state,
-            new_value={"status": row.status, "updated_at": row.updated_at},
+            new_value={
+                "status": row.status,
+                "is_active": row.is_active,
+                "updated_at": row.updated_at,
+            },
         )
 
         db.commit()

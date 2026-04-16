@@ -50,6 +50,12 @@ def _has_pin(user: UserDB) -> bool:
     return bool((user.pin_hash or "").strip())
 
 
+def _is_db_user_active(user: UserDB) -> bool:
+    if getattr(user, "is_active", True) is False:
+        return False
+    return _normalize_account_status(getattr(user, "status", None)) != "disabled"
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     plain_password = (plain_password or "").strip()
     hashed_password = (hashed_password or "").strip()
@@ -91,7 +97,7 @@ def authenticate_user(email: str, password: str) -> Optional[User]:
             id=user.user_id,
             email=user.email,
             full_name=user.username,
-            is_active=True,
+            is_active=_is_db_user_active(user),
             is_admin=role_name == "admin",
             status=_normalize_account_status(user.status),
             has_pin=_has_pin(user),
@@ -139,7 +145,7 @@ def authenticate_user_by_username_or_email(username_or_email: str, password: str
             "username": user.username,
             "email": user.email,
             "full_name": user.username,
-            "is_active": True,
+            "is_active": _is_db_user_active(user),
             "is_admin": role_name == "admin",
             "role": role_name,
             "status": _normalize_account_status(user.status),
@@ -188,7 +194,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(h
             id=user.user_id,
             email=user.email,
             full_name=user.username,
-            is_active=True,
+            is_active=_is_db_user_active(user),
             role=role_name,
             is_admin=role_name == "admin",
             status=_normalize_account_status(user.status),
@@ -200,7 +206,14 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(h
 
 async def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
     if not current_user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "ACCOUNT_DISABLED",
+                "message": "Account is disabled",
+                "is_active": False,
+            },
+        )
     return current_user
 
 

@@ -67,6 +67,7 @@ class Token(BaseModel):
     role: str  # admin, manager, risk analyst, viewer
     status: str | None = None
     has_pin: bool = False
+    is_active: bool = True
 
 
 class TokenData(BaseModel):
@@ -173,6 +174,7 @@ class PendingAccountStatusResponse(BaseModel):
     role: str
     status: str
     has_pin: bool
+    is_active: bool
     rejection_reason: Optional[str] = None
 
 

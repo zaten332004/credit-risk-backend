@@ -37,6 +37,7 @@ class UserDB(Base):
     
     # Registration workflow fields
     status = Column(String(20), nullable=False, default="pending")  # pending, approved, rejected, verified
+    is_active = Column(Boolean, nullable=False, default=True)
     user_type = Column(String(20), nullable=True)  # 'analyst' or 'manager' - auto-filled from registration_type
     verification_token = Column(String(255), nullable=True)
     verification_sent_at = Column(DateTime, nullable=True)

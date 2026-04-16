@@ -41,6 +41,12 @@ def _resolve_pending_role(db: Session, user: UserDB) -> str:
     return "viewer"
 
 
+def _is_user_active(user: UserDB) -> bool:
+    if getattr(user, "is_active", True) is False:
+        return False
+    return str((user.status or "")).strip().lower() != "disabled"
+
+
 def get_pending_account_status(db: Session, user_id: int) -> dict:
     user = db.query(UserDB).filter(UserDB.user_id == user_id).first()
     if not user:
@@ -53,6 +59,7 @@ def get_pending_account_status(db: Session, user_id: int) -> dict:
         "role": _resolve_pending_role(db, user),
         "status": str((user.status or "pending")).strip().lower() or "pending",
         "has_pin": bool((user.pin_hash or "").strip()),
+        "is_active": _is_user_active(user),
         "rejection_reason": reason or None,
     }
 

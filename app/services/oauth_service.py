@@ -160,6 +160,7 @@ class OAuthService:
             role=role_name,
             status=(user.status or "pending"),
             has_pin=bool((user.pin_hash or "").strip()),
+            is_active=bool(getattr(user, "is_active", True)) and str((user.status or "")).strip().lower() != "disabled",
         )
 
     @staticmethod
