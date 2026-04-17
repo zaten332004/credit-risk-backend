@@ -60,6 +60,12 @@ class PowerBIService:
             raise ValueError("Missing user id for Power BI config")
         return str(value)
 
+    def _safe_user_id(self, user: Any) -> str:
+        try:
+            return self._get_user_id(user)
+        except Exception:
+            return "unknown"
+
     def _config_path(self, user: Any) -> Path:
         return self._config_dir / f"{self._get_user_id(user)}.json"
 
@@ -162,6 +168,7 @@ class PowerBIService:
         Returns:
             Access token string or None if authentication fails
         """
+        user_id = self._safe_user_id(user)
         try:
             # Use provided credentials, then user fields (if present), then settings/env vars
             tenant = (
@@ -174,15 +181,15 @@ class PowerBIService:
             secret = client_secret or os.getenv("POWER_BI_CLIENT_SECRET") or settings.power_bi_client_secret
             
             if not all([tenant, client, secret]):
-                logger.warning(f"Missing Power BI credentials for user {user.user_id}")
+                logger.warning("Missing Power BI credentials for user %s", user_id)
                 return None
             
             # Check cache first
-            cache_key = f"{user.user_id}_{tenant}"
+            cache_key = f"{user_id}_{tenant}"
             if cache_key in self.token_cache:
                 token, expiry = self.token_cache[cache_key]
                 if datetime.utcnow() < expiry:
-                    logger.debug(f"Using cached token for user {user.user_id}")
+                    logger.debug("Using cached token for user %s", user_id)
                     return token
             
             token, expires_in = self._request_token(tenant=tenant, client_id=client, client_secret=secret)
@@ -193,10 +200,10 @@ class PowerBIService:
             expiry = datetime.utcnow() + timedelta(seconds=expires_in - 60)
             self.token_cache[cache_key] = (token, expiry)
             
-            logger.info(f"✅ New access token obtained for user {user.user_id}")
+            logger.info("✅ New access token obtained for user %s", user_id)
             return token
             
-        except requests.RequestException as e:
+        except Exception as e:
             logger.error(f"❌ Failed to get Power BI access token: {str(e)}")
             return None
     
@@ -798,7 +805,7 @@ class PowerBIService:
             data = response.json()
             workspaces = data.get("value", [])
             
-            logger.info(f"✅ Retrieved {len(workspaces)} workspaces for user {user.user_id}")
+            logger.info("✅ Retrieved %s workspaces for user %s", len(workspaces), self._safe_user_id(user))
             return workspaces
             
         except Exception as e:
@@ -816,7 +823,7 @@ class PowerBIService:
             Workspace details or None
         """
         if not user.power_bi_workspace_id:
-            logger.warning(f"No workspace ID configured for user {user.user_id}")
+            logger.warning("No workspace ID configured for user %s", self._safe_user_id(user))
             return None
         
         try:
@@ -849,7 +856,7 @@ class PowerBIService:
             List of datasets or None
         """
         if not user.power_bi_workspace_id:
-            logger.warning(f"No workspace ID configured for user {user.user_id}")
+            logger.warning("No workspace ID configured for user %s", self._safe_user_id(user))
             return None
         
         try:
@@ -886,11 +893,11 @@ class PowerBIService:
         """
         dataset = dataset_id or user.power_bi_dataset_id
         if not dataset:
-            logger.warning(f"No dataset ID provided for user {user.user_id}")
+            logger.warning("No dataset ID provided for user %s", self._safe_user_id(user))
             return None
         
         if not user.power_bi_workspace_id:
-            logger.warning(f"No workspace ID configured for user {user.user_id}")
+            logger.warning("No workspace ID configured for user %s", self._safe_user_id(user))
             return None
         
         try:
@@ -935,7 +942,7 @@ class PowerBIService:
         """
         dataset = dataset_id or user.power_bi_dataset_id
         if not dataset or not user.power_bi_workspace_id:
-            logger.warning(f"Missing dataset or workspace ID for user {user.user_id}")
+            logger.warning("Missing dataset or workspace ID for user %s", self._safe_user_id(user))
             return None
         
         try:
@@ -1086,7 +1093,7 @@ class PowerBIService:
         """
         dataset = dataset_id or user.power_bi_dataset_id
         if not dataset or not user.power_bi_workspace_id:
-            logger.warning(f"Missing dataset or workspace ID for user {user.user_id}")
+            logger.warning("Missing dataset or workspace ID for user %s", self._safe_user_id(user))
             return False
         
         try:
