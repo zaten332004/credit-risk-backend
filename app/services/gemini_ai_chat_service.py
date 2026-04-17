@@ -46,6 +46,26 @@ from app.services.chat_session_metadata import (
 logger = logging.getLogger(__name__)
 
 
+def normalize_gemini_model_id(model: Optional[str]) -> str:
+    """
+    Map env/UI strings to a Google GenAI model id.
+
+    Examples:
+      "Gemini 2.5 Flash Lite" -> "gemini-2.5-flash-lite"
+      "models/gemini-2.5-flash" -> "gemini-2.5-flash"
+    """
+    m = (model or "").strip()
+    if not m:
+        return ""
+    if m.startswith("models/"):
+        m = m[len("models/") :].strip()
+    if " " in m:
+        m = "-".join(m.lower().split())
+    else:
+        m = m.lower()
+    return m
+
+
 @dataclass
 class GeminiChatResponse:
     session_id: str
@@ -599,9 +619,9 @@ class GeminiAIChatService:
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY not found. Set GEMINI_API_KEY (or gemini_api_key) in .env")
 
-        raw_model = (model or os.getenv("GEMINI_MODEL") or settings.gemini_model or "gemini-2.0-flash").strip()
-        if raw_model.startswith("models/"):
-            raw_model = raw_model[len("models/") :]
+        raw_model = normalize_gemini_model_id(
+            model or os.getenv("GEMINI_MODEL") or settings.gemini_model or "gemini-2.0-flash"
+        )
         self.model = raw_model
         self.mode_tier = self._infer_mode_tier(raw_model)
 

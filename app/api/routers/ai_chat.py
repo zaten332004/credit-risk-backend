@@ -26,7 +26,11 @@ from app.core.security import get_current_active_user
 from app.db.session import SessionLocal
 from app.db.models import ChatHistoryDB, ChatSessionDB
 from app.schemas.schemas import User
-from app.services.gemini_ai_chat_service import GeminiResourceExhaustedError, GeminiServiceOverloadedError
+from app.services.gemini_ai_chat_service import (
+    GeminiResourceExhaustedError,
+    GeminiServiceOverloadedError,
+    normalize_gemini_model_id,
+)
 from app.services.mock_ai_chat_service import MockAIChatService
 from app.services.analytics_data_service import (
     _extract_table_names,
@@ -243,12 +247,7 @@ def _user_role(user: User) -> str:
 
 
 def _normalize_model_id(model: str) -> str:
-    m = (model or "").strip()
-    if not m:
-        return ""
-    if m.startswith("models/"):
-        m = m[len("models/") :]
-    return m
+    return normalize_gemini_model_id(model)
 
 
 def _gemini_model_catalog() -> List[dict]:
@@ -990,7 +989,10 @@ async def ai_chat_debug(current_user: User = Depends(get_current_active_user)):
         "resolved_model": resolved_model,
         "provider_init_error": provider_init_error,
         "has_gemini_key": bool(os.getenv("GEMINI_API_KEY") or settings.gemini_api_key),
-        "gemini_model": (os.getenv("GEMINI_MODEL") or settings.gemini_model or "gemini-2.0-flash").strip() or None,
+        "gemini_model": normalize_gemini_model_id(
+            os.getenv("GEMINI_MODEL") or settings.gemini_model or "gemini-2.0-flash"
+        )
+        or None,
         "context_source": (os.getenv("AI_CHAT_CONTEXT_SOURCE") or settings.ai_chat_context_source or "db").strip().lower(),
         "powerbi_configured": bool(
             (settings.power_bi_tenant_id or "").strip()
