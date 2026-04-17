@@ -1170,7 +1170,7 @@ class PowerBIService:
             raise PowerBIConfigValidationError(
                 code="INSUFFICIENT_POWERBI_PERMISSION",
                 message="Service principal does not have access to the requested workspace.",
-                status_code=400,
+                status_code=403,
             )
         if response.status_code == 404:
             raise PowerBIConfigValidationError(
@@ -1211,7 +1211,7 @@ class PowerBIService:
             raise PowerBIConfigValidationError(
                 code="INSUFFICIENT_POWERBI_PERMISSION",
                 message="Service principal does not have permission to access the dataset.",
-                status_code=400,
+                status_code=403,
             )
         if response.status_code == 404:
             global_url = f"{self.base_url}/datasets/{dataset_id}"
@@ -1291,7 +1291,7 @@ class PowerBIService:
         token = self.get_access_token(user=user, tenant_id=tenant)
         if not token:
             raise PowerBIConfigValidationError(
-                code="INSUFFICIENT_POWERBI_PERMISSION",
+                code="POWERBI_TOKEN_ERROR",
                 message="Failed to obtain Power BI access token for the provided tenant/service principal.",
                 status_code=400,
             )

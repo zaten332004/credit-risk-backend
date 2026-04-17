@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from urllib.parse import quote
 
 from app.core.security import get_current_active_user
 from app.db.session import get_db
@@ -101,6 +102,14 @@ class PowerBIConfigureResponse(BaseModel):
     message: str
 
 
+class PowerBIAdminConsentResponse(BaseModel):
+    tenant_id: str
+    client_id: str
+    redirect_uri: str
+    scope: str = "tenant_admin_consent"
+    consent_url: str
+
+
 class PowerBIRiskDataResponse(BaseModel):
     """Risk data from Power BI"""
     high_risk_customers: int
@@ -188,6 +197,43 @@ async def configure_powerbi(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error configuring Power BI: {str(e)}"
         )
+
+
+@router.get("/admin-consent-url", response_model=PowerBIAdminConsentResponse)
+async def get_powerbi_admin_consent_url(
+    current_user: Any = Depends(get_current_active_user),
+):
+    del current_user
+    tenant_id = str(settings.power_bi_tenant_id or "").strip()
+    client_id = str(settings.power_bi_client_id or "").strip()
+    redirect_uri = (
+        str(settings.power_bi_admin_consent_redirect_uri or "").strip()
+        or str(settings.FRONTEND_BASE_URL or "").strip()
+        or "https://localhost"
+    )
+
+    if not tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "MISSING_POWERBI_TENANT_CONFIG", "message": "POWER_BI_TENANT_ID is not configured on backend."},
+        )
+    if not client_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "MISSING_POWERBI_CLIENT_CONFIG", "message": "POWER_BI_CLIENT_ID is not configured on backend."},
+        )
+
+    consent_url = (
+        f"https://login.microsoftonline.com/{tenant_id}/adminconsent"
+        f"?client_id={quote(client_id, safe='')}"
+        f"&redirect_uri={quote(redirect_uri, safe='')}"
+    )
+    return PowerBIAdminConsentResponse(
+        tenant_id=tenant_id,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        consent_url=consent_url,
+    )
 
 
 @router.get("/status", response_model=PowerBIConnectionResponse)

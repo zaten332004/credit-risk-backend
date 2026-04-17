@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     power_bi_tenant_id: str = ""
     power_bi_client_id: str = ""
     power_bi_client_secret: str = ""
+    # Optional frontend callback URL for Entra admin consent redirect.
+    power_bi_admin_consent_redirect_uri: str = ""
     # Optional: default workspace/dataset for backend-to-PowerBI queries
     power_bi_workspace_id: str = ""
     power_bi_dataset_id: str = ""
