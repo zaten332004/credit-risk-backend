@@ -481,12 +481,11 @@ class GeminiAIChatService:
             "- Do dai: uu tien DU y chinh; neu cau hoi can xep hang/chon tu danh sach thi phai co ten/dong cu the, khong cat ngang giua cau."
         ),
     }
+    # Do not set max_output_tokens: use each model's API default (avoids artificial truncation).
     MODE_GENERATION_CONFIGS = {
-        # Output caps: too-low values truncate mid-sentence (especially English + tables).
-        # Tune down on latency-sensitive deployments if needed.
-        "fast": {"max_output_tokens": 1536, "temperature": 0.2},
-        "thinking": {"max_output_tokens": 3072, "temperature": 0.25},
-        "pro": {"max_output_tokens": 4096, "temperature": 0.2},
+        "fast": {"temperature": 0.2},
+        "thinking": {"temperature": 0.25},
+        "pro": {"temperature": 0.2},
     }
     MODE_HISTORY_LIMITS = {
         # Fewer history turns reduces token load and latency.
@@ -933,7 +932,7 @@ class GeminiAIChatService:
             try:
                 gen_cfg = self._generation_config()
                 try:
-                    # Prefer bounded output for lower latency; fallback if SDK version differs.
+                    # Temperature only unless MODE_GENERATION_CONFIGS adds more; SDK default caps output length.
                     resp = self.client.models.generate_content(
                         model=self.model,
                         contents=contents,
