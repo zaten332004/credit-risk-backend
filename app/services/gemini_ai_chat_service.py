@@ -468,19 +468,28 @@ class GeminiAIChatService:
             "- Neu hop le: ket thuc bang 1-3 goi y hanh dong nghiep vu, khong bat buoc neu cau hoi chi can giai thich."
         ),
         "pro": (
-            "Che do Pro (mo hinh suy luan sau):\n"
-            "- Tra loi sau, day du: cac nhanh ly luan, bang chung, va ket luan phai du de nguoi dung tin cay; tranh rut gon lam mat tinh thuyet phuc.\n"
-            "- Voi phan tich nhieu buoc: neu ngan cac gia dinh / dieu kien dau vao (neu co) de nguoi dung kiem tra lai duoc.\n"
-            "- Dong vai chuyen gia quan tri rui ro tin dung: lam ro pham vi, gia dinh, do tin cay cua ket luan.\n"
-            "- Chu dong khai thac toan bo ngu canh: ghep nhieu bang/cot/dong khi co ich; neu co nhieu huong phan tich, chon huong giau thong tin nhat cho cau hoi.\n"
-            "- Voi bai toan lon: co the di tu tom tat ngu canh -> bang chung (cot/nguong/so) -> phan tich nguyen nhan & tac dong -> rui ro con lai -> kien nghi; "
-            "voi cau hoi hep hay chi tiet ky thuat, di sau thang vao phan do, khong can mo day du 5 muc.\n"
-            "- Noi lien cac phan trong du lieu, neu nhan dinh tong hop va y nghia nghiep vu khi ngu canh cho phep - van neo bang bang chung cu the.\n"
-            "- Nhieu kich ban: neu kich ban chinh + dieu kien doi kich ban; tranh ket luan don nghia khi du lieu nhieu tap.\n"
-            "- So lieu: xu huong, ngoai le, y nghia nghiep vu; khong tao so dep khong co trong ngu canh.\n"
-            "- Policy/SBV: dung khung system prompt, khong gan nhom no khi du lieu khong du.\n"
-            "- Giong chuyen nghiep, co chieu sau, san sang mo rong khi duoc hoi them."
+            "Che do Pro (day du nhung toi uu toc do):\n"
+            "- Muc tieu uu tien: van tra loi DAY DU y chinh nhung thoi gian nhanh; khong trinh bay dai dong hoac mo rong khong duoc hoi.\n"
+            "- Mac dinh cau truc gon: 1 ket luan ngan -> 3-6 y chinh co bang chung -> 1 buoc tiep theo neu can.\n"
+            "- Chi dua nhung bang chung quan trong nhat (toi da ~3-5 diem/so lieu then chot); khong chep lai toan bo bang/context.\n"
+            "- Neu cau hoi da ro, tra loi thang vao ket qua; chi hoi toi da 1 cau lam ro khi thieu thong tin bat buoc.\n"
+            "- Voi bai toan lon, chon 1 huong phan tich gia tri nhat truoc; chi mo them kich ban phu khi nguoi dung yeu cau.\n"
+            "- Van dong vai chuyen gia rui ro tin dung: neu ro pham vi, gia dinh can thiet, va muc do tin cay nhung khong lap khuon may moc.\n"
+            "- So lieu phai dung ngu canh: khong bia cot, bang, hay con so; neu thieu du lieu thi noi ro phan thieu va ket luan tam thoi.\n"
+            "- Giong chuyen nghiep, tuc thi, de scan nhanh; san sang dao sau hon khi nguoi dung hoi tiep."
         ),
+    }
+    MODE_GENERATION_CONFIGS = {
+        # Keep responses practical and fast while preserving substance.
+        "fast": {"max_output_tokens": 640, "temperature": 0.2},
+        "thinking": {"max_output_tokens": 900, "temperature": 0.25},
+        "pro": {"max_output_tokens": 1100, "temperature": 0.2},
+    }
+    MODE_HISTORY_LIMITS = {
+        # Fewer history turns reduces token load and latency.
+        "fast": 10,
+        "thinking": 14,
+        "pro": 12,
     }
     SYSTEM_PROMPT = (
         "Ban la tro ly AI uu tien phan tich rui ro tin dung, tai chinh ngan hang, danh muc vay, khach hang va du lieu nghiep vu lien quan. "
@@ -610,6 +619,12 @@ class GeminiAIChatService:
             return self.SYSTEM_PROMPT
         return f"{self.SYSTEM_PROMPT}\n\n---\n{mode_prompt}"
 
+    def _history_limit(self) -> int:
+        return int(self.MODE_HISTORY_LIMITS.get(self.mode_tier or "", 14))
+
+    def _generation_config(self) -> Dict:
+        return dict(self.MODE_GENERATION_CONFIGS.get(self.mode_tier or "", {}))
+
     def start_chat_session(
         self,
         session: Session,
@@ -663,7 +678,7 @@ class GeminiAIChatService:
                 session.query(ChatHistoryDB)
                 .filter(ChatHistoryDB.session_id == sid)
                 .order_by(ChatHistoryDB.created_at)
-                .limit(20)
+                .limit(self._history_limit())
                 .all()
             )
 
@@ -898,10 +913,19 @@ class GeminiAIChatService:
             contents.append({"role": "user", "parts": [{"text": user_text}]})
 
             try:
-                resp = self.client.models.generate_content(
-                    model=self.model,
-                    contents=contents,
-                )
+                gen_cfg = self._generation_config()
+                try:
+                    # Prefer bounded output for lower latency; fallback if SDK version differs.
+                    resp = self.client.models.generate_content(
+                        model=self.model,
+                        contents=contents,
+                        config=gen_cfg if gen_cfg else None,
+                    )
+                except TypeError:
+                    resp = self.client.models.generate_content(
+                        model=self.model,
+                        contents=contents,
+                    )
             except Exception as exc:
                 msg = str(exc)
                 if _looks_like_resource_exhausted(msg):
