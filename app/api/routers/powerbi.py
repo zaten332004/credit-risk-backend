@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.security import get_current_active_user
 from app.db.session import get_db
 from app.core.config import settings
-from app.services.powerbi_service import powerbi_service
+from app.services.powerbi_service import powerbi_service, PowerBIConfigValidationError
 from app.services.analytics_data_service import (
     _dedupe_keep_order,
     _extract_table_names,
@@ -37,7 +37,7 @@ class PowerBIConfigRequest(BaseModel):
     """Request to configure Power BI workspace"""
     workspace_id: str
     dataset_id: str
-    tenant_id: Optional[str] = None
+    tenant_id: str
     workspace_name: Optional[str] = None
     dataset_name: Optional[str] = None
 
@@ -77,6 +77,7 @@ class PowerBIDatasetResponse(BaseModel):
 class PowerBIConnectionResponse(BaseModel):
     """Power BI connection status"""
     connected: bool
+    success: Optional[bool] = None
     tenant_id: Optional[str] = None
     workspace_id: Optional[str] = None
     workspace_name: Optional[str] = None
@@ -84,6 +85,19 @@ class PowerBIConnectionResponse(BaseModel):
     dataset_name: Optional[str] = None
     table_names: Optional[List[str]] = None
     last_sync: Optional[str] = None
+    scope: Optional[str] = None
+    validation_error_code: Optional[str] = None
+    message: str
+
+
+class PowerBIConfigureResponse(BaseModel):
+    success: bool
+    connected: bool
+    tenant_id: str
+    workspace_id: str
+    workspace_name: Optional[str] = None
+    dataset_id: str
+    dataset_name: Optional[str] = None
     message: str
 
 
@@ -119,7 +133,7 @@ class PowerBITableHintsRequest(BaseModel):
 # API Endpoints
 # =========================================================================
 
-@router.post("/configure", response_model=dict)
+@router.post("/configure", response_model=PowerBIConfigureResponse)
 async def configure_powerbi(
     config: PowerBIConfigRequest,
     current_user: Any = Depends(get_current_active_user),
@@ -131,26 +145,42 @@ async def configure_powerbi(
     Each user can have their own Power BI workspace
     """
     try:
+        validated = powerbi_service.validate_account_powerbi_config(
+            user=current_user,
+            tenant_id=config.tenant_id,
+            workspace_id=config.workspace_id,
+            dataset_id=config.dataset_id,
+        )
+
         success = powerbi_service.update_user_powerbi_config(
             db=db,
             user=current_user,
-            workspace_id=config.workspace_id,
-            dataset_id=config.dataset_id,
-            tenant_id=config.tenant_id,
-            workspace_name=config.workspace_name,
-            dataset_name=config.dataset_name,
+            workspace_id=validated["workspace_id"],
+            dataset_id=validated["dataset_id"],
+            tenant_id=validated["tenant_id"],
+            workspace_name=config.workspace_name or validated["workspace_name"],
+            dataset_name=config.dataset_name or validated["dataset_name"],
         )
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to persist Power BI config"
             )
-        return {
-            "success": True,
-            "message": "Power BI workspace configured successfully",
-            "workspace_id": config.workspace_id,
-            "dataset_id": config.dataset_id
-        }
+        return PowerBIConfigureResponse(
+            success=True,
+            connected=True,
+            tenant_id=validated["tenant_id"],
+            workspace_id=validated["workspace_id"],
+            workspace_name=config.workspace_name or validated["workspace_name"],
+            dataset_id=validated["dataset_id"],
+            dataset_name=config.dataset_name or validated["dataset_name"],
+            message="Power BI workspace configured and verified successfully",
+        )
+    except PowerBIConfigValidationError as e:
+        raise HTTPException(
+            status_code=e.status_code,
+            detail={"code": e.code, "message": e.message},
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -165,21 +195,20 @@ async def get_powerbi_status(
     current_user: Any = Depends(get_current_active_user),
 ):
     runtime_user = _runtime_user(current_user)
-    connected = bool(
-        runtime_user.power_bi_enabled
-        and runtime_user.power_bi_workspace_id
-        and runtime_user.power_bi_dataset_id
-    )
+    status_info = powerbi_service.get_account_powerbi_status(runtime_user)
     return PowerBIConnectionResponse(
-        connected=connected,
-        tenant_id=runtime_user.power_bi_tenant_id,
-        workspace_id=runtime_user.power_bi_workspace_id,
-        workspace_name=getattr(runtime_user, "power_bi_workspace_name", None),
-        dataset_id=runtime_user.power_bi_dataset_id,
-        dataset_name=getattr(runtime_user, "power_bi_dataset_name", None),
+        connected=bool(status_info.get("connected")),
+        success=bool(status_info.get("connected")),
+        tenant_id=status_info.get("tenant_id"),
+        workspace_id=status_info.get("workspace_id"),
+        workspace_name=status_info.get("workspace_name"),
+        dataset_id=status_info.get("dataset_id"),
+        dataset_name=status_info.get("dataset_name"),
         table_names=getattr(runtime_user, "power_bi_table_names", None) or [],
         last_sync=runtime_user.power_bi_last_sync.isoformat() if runtime_user.power_bi_last_sync else None,
-        message="Power BI da duoc cau hinh cho tai khoan nay." if connected else "Power BI chua duoc cau hinh.",
+        scope="account",
+        validation_error_code=status_info.get("validation_error_code"),
+        message=str(status_info.get("message") or "Power BI status available."),
     )
 
 
@@ -227,11 +256,13 @@ async def test_powerbi_connection(
 
     return PowerBIConnectionResponse(
         connected=connected,
+        success=connected,
         workspace_id=None,
         workspace_name=None,
         dataset_id=None,
         dataset_name=None,
         last_sync=None,
+        scope="global",
         message=message,
     )
 

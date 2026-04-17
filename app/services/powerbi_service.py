@@ -5,6 +5,7 @@ Handles multi-workspace Power BI connections and data retrieval
 import os
 import json
 import logging
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Any
@@ -17,6 +18,23 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+GUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{12}$"
+)
+
+
+class PowerBIConfigValidationError(Exception):
+    """Known validation failures for account-scoped Power BI config."""
+
+    def __init__(self, code: str, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status_code = status_code
 
 
 class PowerBIService:
@@ -1111,6 +1129,235 @@ class PowerBIService:
         except Exception as e:
             logger.error(f"❌ Power BI connection test failed: {str(e)}")
             return False
+
+    @staticmethod
+    def _normalize_id(value: Optional[str]) -> str:
+        return str(value or "").strip()
+
+    @staticmethod
+    def _is_guid(value: str) -> bool:
+        return bool(GUID_RE.match(value))
+
+    @staticmethod
+    def _trim_body(text: str, limit: int = 2000) -> str:
+        value = (text or "").strip()
+        if len(value) > limit:
+            return value[:limit] + "..."
+        return value
+
+    def _tenant_exists(self, tenant_id: str) -> Optional[bool]:
+        # Lightweight existence check before trying authenticated Power BI calls.
+        url = f"https://login.microsoftonline.com/{tenant_id}/v2.0/.well-known/openid-configuration"
+        try:
+            response = requests.get(url, timeout=8)
+            return response.status_code == 200
+        except Exception:
+            return None
+
+    def _validate_workspace_access(self, token: str, workspace_id: str) -> Dict[str, Any]:
+        headers = self._get_headers(token)
+        url = f"{self.base_url}/groups/{workspace_id}"
+        try:
+            response = requests.get(url, headers=headers, timeout=12)
+        except Exception as exc:
+            raise PowerBIConfigValidationError(
+                code="POWERBI_VALIDATION_REQUEST_FAILED",
+                message=f"Power BI request failed while validating workspace: {str(exc)}",
+                status_code=400,
+            ) from exc
+
+        if response.status_code in (401, 403):
+            raise PowerBIConfigValidationError(
+                code="INSUFFICIENT_POWERBI_PERMISSION",
+                message="Service principal does not have access to the requested workspace.",
+                status_code=400,
+            )
+        if response.status_code == 404:
+            raise PowerBIConfigValidationError(
+                code="WORKSPACE_NOT_FOUND",
+                message="Workspace was not found or is not accessible by the service principal.",
+                status_code=400,
+            )
+        if response.status_code >= 400:
+            body = self._trim_body(response.text)
+            raise PowerBIConfigValidationError(
+                code="POWERBI_WORKSPACE_VALIDATION_FAILED",
+                message=f"Workspace validation failed: {body or f'HTTP {response.status_code}'}",
+                status_code=400,
+            )
+        try:
+            return response.json()
+        except Exception:
+            return {}
+
+    def _validate_dataset_in_workspace(
+        self,
+        token: str,
+        workspace_id: str,
+        dataset_id: str,
+    ) -> Dict[str, Any]:
+        headers = self._get_headers(token)
+        scoped_url = f"{self.base_url}/groups/{workspace_id}/datasets/{dataset_id}"
+        try:
+            response = requests.get(scoped_url, headers=headers, timeout=12)
+        except Exception as exc:
+            raise PowerBIConfigValidationError(
+                code="POWERBI_VALIDATION_REQUEST_FAILED",
+                message=f"Power BI request failed while validating dataset: {str(exc)}",
+                status_code=400,
+            ) from exc
+
+        if response.status_code in (401, 403):
+            raise PowerBIConfigValidationError(
+                code="INSUFFICIENT_POWERBI_PERMISSION",
+                message="Service principal does not have permission to access the dataset.",
+                status_code=400,
+            )
+        if response.status_code == 404:
+            global_url = f"{self.base_url}/datasets/{dataset_id}"
+            try:
+                global_response = requests.get(global_url, headers=headers, timeout=12)
+            except Exception:
+                global_response = None
+
+            if global_response is not None and global_response.status_code == 200:
+                raise PowerBIConfigValidationError(
+                    code="DATASET_NOT_IN_WORKSPACE",
+                    message="Dataset exists but does not belong to the configured workspace.",
+                    status_code=400,
+                )
+
+            raise PowerBIConfigValidationError(
+                code="DATASET_NOT_FOUND",
+                message="Dataset was not found.",
+                status_code=400,
+            )
+        if response.status_code >= 400:
+            body = self._trim_body(response.text)
+            raise PowerBIConfigValidationError(
+                code="POWERBI_DATASET_VALIDATION_FAILED",
+                message=f"Dataset validation failed: {body or f'HTTP {response.status_code}'}",
+                status_code=400,
+            )
+        try:
+            return response.json()
+        except Exception:
+            return {}
+
+    def validate_account_powerbi_config(
+        self,
+        user: Any,
+        tenant_id: str,
+        workspace_id: str,
+        dataset_id: str,
+    ) -> Dict[str, Any]:
+        tenant = self._normalize_id(tenant_id)
+        workspace = self._normalize_id(workspace_id)
+        dataset = self._normalize_id(dataset_id)
+
+        if not tenant or not self._is_guid(tenant):
+            raise PowerBIConfigValidationError(
+                code="INVALID_TENANT_ID",
+                message="tenant_id is required and must be a valid GUID.",
+                status_code=422,
+            )
+        if not workspace or not self._is_guid(workspace):
+            raise PowerBIConfigValidationError(
+                code="INVALID_WORKSPACE_ID",
+                message="workspace_id is required and must be a valid GUID.",
+                status_code=422,
+            )
+        if not dataset or not self._is_guid(dataset):
+            raise PowerBIConfigValidationError(
+                code="INVALID_DATASET_ID",
+                message="dataset_id is required and must be a valid GUID.",
+                status_code=422,
+            )
+
+        tenant_exists = self._tenant_exists(tenant)
+        if tenant_exists is None:
+            raise PowerBIConfigValidationError(
+                code="POWERBI_VALIDATION_REQUEST_FAILED",
+                message="Unable to verify tenant at this time. Please retry.",
+                status_code=400,
+            )
+        if not tenant_exists:
+            raise PowerBIConfigValidationError(
+                code="INVALID_TENANT_ID",
+                message="Tenant was not found in Azure AD.",
+                status_code=400,
+            )
+
+        token = self.get_access_token(user=user, tenant_id=tenant)
+        if not token:
+            raise PowerBIConfigValidationError(
+                code="INSUFFICIENT_POWERBI_PERMISSION",
+                message="Failed to obtain Power BI access token for the provided tenant/service principal.",
+                status_code=400,
+            )
+
+        workspace_info = self._validate_workspace_access(token=token, workspace_id=workspace)
+        dataset_info = self._validate_dataset_in_workspace(
+            token=token,
+            workspace_id=workspace,
+            dataset_id=dataset,
+        )
+
+        return {
+            "tenant_id": tenant,
+            "workspace_id": workspace,
+            "dataset_id": dataset,
+            "workspace_name": str(workspace_info.get("name") or "").strip() or None,
+            "dataset_name": str(dataset_info.get("name") or "").strip() or None,
+        }
+
+    def get_account_powerbi_status(self, user: Any) -> Dict[str, Any]:
+        tenant_id = self._normalize_id(getattr(user, "power_bi_tenant_id", None))
+        workspace_id = self._normalize_id(getattr(user, "power_bi_workspace_id", None))
+        dataset_id = self._normalize_id(getattr(user, "power_bi_dataset_id", None))
+        workspace_name = self._normalize_id(getattr(user, "power_bi_workspace_name", None)) or None
+        dataset_name = self._normalize_id(getattr(user, "power_bi_dataset_name", None)) or None
+
+        if not bool(getattr(user, "power_bi_enabled", False)) or not all([tenant_id, workspace_id, dataset_id]):
+            return {
+                "connected": False,
+                "tenant_id": tenant_id or None,
+                "workspace_id": workspace_id or None,
+                "workspace_name": workspace_name,
+                "dataset_id": dataset_id or None,
+                "dataset_name": dataset_name,
+                "validation_error_code": "POWERBI_NOT_CONFIGURED",
+                "message": "Power BI is not configured for this account.",
+            }
+
+        try:
+            validated = self.validate_account_powerbi_config(
+                user=user,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                dataset_id=dataset_id,
+            )
+            return {
+                "connected": True,
+                "tenant_id": validated["tenant_id"],
+                "workspace_id": validated["workspace_id"],
+                "workspace_name": validated["workspace_name"] or workspace_name,
+                "dataset_id": validated["dataset_id"],
+                "dataset_name": validated["dataset_name"] or dataset_name,
+                "validation_error_code": None,
+                "message": "Power BI configuration is valid.",
+            }
+        except PowerBIConfigValidationError as exc:
+            return {
+                "connected": False,
+                "tenant_id": tenant_id,
+                "workspace_id": workspace_id,
+                "workspace_name": workspace_name,
+                "dataset_id": dataset_id,
+                "dataset_name": dataset_name,
+                "validation_error_code": exc.code,
+                "message": exc.message,
+            }
 
     def update_user_powerbi_config(
         self,
