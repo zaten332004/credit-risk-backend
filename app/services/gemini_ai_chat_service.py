@@ -465,6 +465,7 @@ class GeminiAIChatService:
             "- Phan tich linh hoat: sap xep, so sanh, hoac danh gia rui ro tuy cau hoi; moi y co can cu trong ngu canh.\n"
             "- Ket luan chinh co the dat dau hoac sau phan giai thich tuy do dai va do phuc tap — uu tien de doc, khong ep khuon.\n"
             "- Khong suy dien vuot qua du lieu; neu thieu X thi noi ro thay vi doan.\n"
+            "- Neu user hoi chon/xep hang tu mot danh sach: bat buoc trich ten/dong tu ngu canh; khong ket thuc giua cau.\n"
             "- Neu hop le: ket thuc bang 1-3 goi y hanh dong nghiep vu; khong can them muc neu user chi can cau tra loi truc tiep."
         ),
         "pro": (
@@ -477,14 +478,15 @@ class GeminiAIChatService:
             "- Van dong vai chuyen gia rui ro tin dung: neu ro pham vi, gia dinh can thiet, va muc do tin cay nhung khong lap khuon may moc.\n"
             "- So lieu phai dung ngu canh: khong bia cot, bang, hay con so; neu thieu du lieu thi noi ro phan thieu va ket luan tam thoi.\n"
             "- Giong chuyen nghiep, tuc thi, de scan nhanh; san sang dao sau hon khi nguoi dung hoi tiep.\n"
-            "- Do dai mac dinh: 120-260 tu; chi mo rong >260 tu khi cau hoi phuc tap ro rang hoac user yeu cau chi tiet."
+            "- Do dai: uu tien DU y chinh; neu cau hoi can xep hang/chon tu danh sach thi phai co ten/dong cu the, khong cat ngang giua cau."
         ),
     }
     MODE_GENERATION_CONFIGS = {
-        # Keep responses practical and fast while preserving substance.
-        "fast": {"max_output_tokens": 640, "temperature": 0.2},
-        "thinking": {"max_output_tokens": 900, "temperature": 0.25},
-        "pro": {"max_output_tokens": 1100, "temperature": 0.2},
+        # Output caps: too-low values truncate mid-sentence (especially English + tables).
+        # Tune down on latency-sensitive deployments if needed.
+        "fast": {"max_output_tokens": 1536, "temperature": 0.2},
+        "thinking": {"max_output_tokens": 3072, "temperature": 0.25},
+        "pro": {"max_output_tokens": 4096, "temperature": 0.2},
     }
     MODE_HISTORY_LIMITS = {
         # Fewer history turns reduces token load and latency.
@@ -499,7 +501,10 @@ class GeminiAIChatService:
         "Quy tac toc do (uu tien cao):\n"
         "- Mac dinh tra loi gon va truc tiep; khong nhac lai toan bo ngu canh, khong chep lai bang dai neu khong duoc yeu cau.\n"
         "- Cau hoi don gian: tra loi ngan gon, vao thang ket qua. Cau hoi phuc tap: mo rong vua du cho quyet dinh.\n"
-        "- Neu nguoi dung muon ban day du chi tiet/bao cao day du, khi do moi mo rong sau.\n\n"
+        "- Neu nguoi dung muon ban day du chi tiet/bao cao day du, khi do moi mo rong sau.\n"
+        "- NEU cau hoi co danh sach/bang trong ngu canh, hoac ho noi 'this list' / 'danh sach' / 'cac ung vien': "
+        "BAT BUOC neu ten/hang muc cu the lay tu ngu canh (hoac neu thieu thi noi ro 'khong thay danh sach trong du lieu') — khong chi noi chung chung.\n"
+        "- KHONG BAO GIO ket thuc giua cau do rut ngan: neu sap het cho thi uu tien 1-2 ket luan day du + ly do ngan.\n\n"
         "Uu tien chu de (mem, khong cung):\n"
         "- Tai chinh / tin dung / rui ro / no / han muc / ho so / bao cao / so lieu trong ngu canh: tra loi day du y nghia, cac buoc ly luan can thiet, va ket luan ro — khong rut gon vo ly.\n"
         "- Cau hoi it lien quan tai chinh nhung van trong kha nang tro ly: tra loi day du, chinh xac, chan that; neu co lien he voi rui ro hoac ho so khach thi noi ro moi lien he.\n"
@@ -970,6 +975,14 @@ class GeminiAIChatService:
                     "I did not receive a reply from the model. Please try again. "
                     "Mình chưa nhận được nội dung trả lời từ mô hình. Bạn thử lại giúp mình nhé."
                 )
+            elif _response_stopped_max_tokens(resp):
+                ai_text = (
+                    f"{ai_text.rstrip()}\n\n---\n"
+                    "[System] Output hit the model length limit; the answer may be incomplete. "
+                    'Ask a narrower question (e.g. top 3 only) or say "continue".\n'
+                    "[Hệ thống] Đã chạm giới hạn độ dài trả lời; có thể chưa đủ ý. "
+                    'Hãy hỏi hẹp hơn (ví dụ chỉ top 3) hoặc nhắn "tiếp tục".'
+                )
 
             prior_rows = (
                 session.query(ChatHistoryDB)
@@ -1089,6 +1102,24 @@ class GeminiAIChatService:
 
     def generate_analysis_report(self, session: Session, session_id: str) -> str:
         return "[GEMINI MODE] Report is not implemented separately yet."
+
+
+def _response_stopped_max_tokens(resp) -> bool:
+    """True when the model stopped because max_output_tokens was reached."""
+    try:
+        cands = getattr(resp, "candidates", None) or []
+        if not cands:
+            return False
+        fr = getattr(cands[0], "finish_reason", None)
+        if fr is None:
+            return False
+        name = getattr(fr, "name", None)
+        if name == "MAX_TOKENS":
+            return True
+        s = str(fr)
+        return "MAX_TOKENS" in s
+    except Exception:
+        return False
 
 
 def _extract_text(resp) -> str:
