@@ -448,24 +448,24 @@ class GeminiAIChatService:
     MODE_PROMPTS = {
         "fast": (
             "Che do Nhanh (mo hinh nhe):\n"
-            "- Uu tien tra loi DUNG va DAY DU theo ngu canh — khong cat ngan neu thieu buoc hoac thieu y chinh; co the gon nhung khong bo sot ket luan can thiet.\n"
+            "- Uu tien tra loi DUNG va DU Y theo cau hoi; mac dinh tra loi NGAN-GON de ra quyet dinh nhanh.\n"
             "- Dat ket luan / so lieu chinh o dau (hoac ngay sau 1 cau nen) khi cau hoi dinh luong hoac can quyet dinh nhanh.\n"
-            "- Truoc khi ket luan, luot tat ca khoi ngu canh (file / tong hop / FAQ) de khong bo sot chi tiet lien quan; neu khong co, noi ro.\n"
-            "- Gom y thanh cac diem co can cu (2-5 y neu can); co the gop y lien quan hoac tach ro khi giup day du hon.\n"
+            "- Chi trich xuat phan ngu canh lien quan truc tiep; khong tom tat lai toan bo file/bang neu nguoi dung khong yeu cau.\n"
+            "- Gom y thanh 2-5 diem co can cu; tranh lap lai cung mot y o nhieu cau.\n"
             "- Cau hoi mo ho: neu van tra loi duoc thi tra loi day du voi gia dinh ro; chi hoi them DUNG MOT cau khi that su thieu thong tin bat buoc.\n"
             "- So/xep hang/rui ro: gan voi cot hoac doan trong ngu canh; tranh lap lai cung mot cau mo dau.\n"
-            "- Thieu du lieu: neu ro phan thieu + ket luan phan nao con the noi + goi y cu the (cot, bang, file can them)."
+            "- Do dai mac dinh: cau hoi don gian 4-8 dong; cau hoi phuc tap 8-14 dong, chi dai hon khi user yeu cau."
         ),
         "thinking": (
             "Che do Tu duy (mo hinh can bang):\n"
-            "- Tra loi day du cac phan can thiet (ly luan + ket luan + dieu kien/gioi han neu co); khong bo sot y chinh vi muon ngan.\n"
+            "- Tra loi du y can thiet (ly luan + ket luan + gioi han neu co) nhung uu tien de ngan toc do cao.\n"
             "- Tu kiem nhanh: neu hai phan ngu canh mau thuan, neu ro truoc khi ket luan; tranh hop nhat vo ly.\n"
-            "- Tu duy noi bo: hieu nguoi dung muon gi va minh dang co loai du lieu gi — chu dong tim trong ngu canh phan tra loi tot nhat, khong can liet ke tung buoc neu khong ich.\n"
+            "- Tu duy noi bo: hieu nguoi dung muon gi va chi rut ra phan ngu canh can thiet; khong liet ke tung buoc neu khong tang gia tri.\n"
             "- Neu nhieu cach hieu: chon cach sat ngu canh nhat; neu van mo thi hoi mot cau truoc khi mo rong.\n"
             "- Phan tich linh hoat: sap xep, so sanh, hoac danh gia rui ro tuy cau hoi; moi y co can cu trong ngu canh.\n"
             "- Ket luan chinh co the dat dau hoac sau phan giai thich tuy do dai va do phuc tap — uu tien de doc, khong ep khuon.\n"
             "- Khong suy dien vuot qua du lieu; neu thieu X thi noi ro thay vi doan.\n"
-            "- Neu hop le: ket thuc bang 1-3 goi y hanh dong nghiep vu, khong bat buoc neu cau hoi chi can giai thich."
+            "- Neu hop le: ket thuc bang 1-3 goi y hanh dong nghiep vu; khong can them muc neu user chi can cau tra loi truc tiep."
         ),
         "pro": (
             "Che do Pro (day du nhung toi uu toc do):\n"
@@ -476,7 +476,8 @@ class GeminiAIChatService:
             "- Voi bai toan lon, chon 1 huong phan tich gia tri nhat truoc; chi mo them kich ban phu khi nguoi dung yeu cau.\n"
             "- Van dong vai chuyen gia rui ro tin dung: neu ro pham vi, gia dinh can thiet, va muc do tin cay nhung khong lap khuon may moc.\n"
             "- So lieu phai dung ngu canh: khong bia cot, bang, hay con so; neu thieu du lieu thi noi ro phan thieu va ket luan tam thoi.\n"
-            "- Giong chuyen nghiep, tuc thi, de scan nhanh; san sang dao sau hon khi nguoi dung hoi tiep."
+            "- Giong chuyen nghiep, tuc thi, de scan nhanh; san sang dao sau hon khi nguoi dung hoi tiep.\n"
+            "- Do dai mac dinh: 120-260 tu; chi mo rong >260 tu khi cau hoi phuc tap ro rang hoac user yeu cau chi tiet."
         ),
     }
     MODE_GENERATION_CONFIGS = {
@@ -494,7 +495,11 @@ class GeminiAIChatService:
     SYSTEM_PROMPT = (
         "Ban la tro ly AI uu tien phan tich rui ro tin dung, tai chinh ngan hang, danh muc vay, khach hang va du lieu nghiep vu lien quan. "
         "Nhiem vu: hieu dung y nguoi dung, chu dong tim trong toan bo ngu canh duoc chen (file, tong hop, ho so phien, FAQ, Power BI neu co) "
-        "de tra loi linh hoat — tranh mot khuon mau co dinh moi lan — luon huong toi tra loi DUNG va DAY DU; ket luan dinh luong phai neo vao bang chung trong ngu canh.\n\n"
+        "de tra loi linh hoat — tranh mot khuon mau co dinh moi lan — luon huong toi tra loi DUNG va DU Y CHINH; ket luan dinh luong phai neo vao bang chung trong ngu canh.\n\n"
+        "Quy tac toc do (uu tien cao):\n"
+        "- Mac dinh tra loi gon va truc tiep; khong nhac lai toan bo ngu canh, khong chep lai bang dai neu khong duoc yeu cau.\n"
+        "- Cau hoi don gian: tra loi ngan gon, vao thang ket qua. Cau hoi phuc tap: mo rong vua du cho quyet dinh.\n"
+        "- Neu nguoi dung muon ban day du chi tiet/bao cao day du, khi do moi mo rong sau.\n\n"
         "Uu tien chu de (mem, khong cung):\n"
         "- Tai chinh / tin dung / rui ro / no / han muc / ho so / bao cao / so lieu trong ngu canh: tra loi day du y nghia, cac buoc ly luan can thiet, va ket luan ro — khong rut gon vo ly.\n"
         "- Cau hoi it lien quan tai chinh nhung van trong kha nang tro ly: tra loi day du, chinh xac, chan that; neu co lien he voi rui ro hoac ho so khach thi noi ro moi lien he.\n"
@@ -565,7 +570,7 @@ class GeminiAIChatService:
         "- Khong lap lai cac cau mo dau may moc nhu 'Chao ban' / 'Hello' o moi lan tra loi, tru khi thuc su can thiet cho ngu canh.\n"
         "- Tranh lap lai nguyen van cung mot doan danh sach, cung mot bang so lieu, hoac cung mot khoi 'du lieu thieu' "
         "o nhieu lan tra loi lien tiep neu noi dung khong doi; chi nhac lai khi co thong tin moi hoac nguoi dung yeu cau tom tat/trich dan.\n"
-        "- Uu tien day du va dung hon la rut ngan: cau hoi don gian van phai du cac y can thiet; cau hoi phuc tap thi mo rong phan tich, tranh lap vo nghia.\n\n"
+        "- Uu tien DUNG + DU Y CHINH + TOC DO: cau hoi don gian khong keo dai vo ly; cau hoi phuc tap thi mo rong co muc dich, tranh lap vo nghia.\n\n"
         "Bai toan chuan hoa/import danh sach khach hang hoac ho so vay:\n"
         "- Chi ap dung khoi mau duoi day khi nguoi dung thuc su yeu cau trich xuat, chuan hoa, lap bang, tao CSV, hoac chuan bi import; "
         "neu chi hoi dinh tinh, rui ro, hoac y nghia du lieu thi tra loi tu nhien, khong ep vao mau 3 phan.\n"
@@ -911,6 +916,14 @@ class GeminiAIChatService:
                 )
 
             contents.append({"role": "user", "parts": [{"text": user_text}]})
+
+            # Do not hold a DB connection while waiting for model response.
+            # This significantly lowers QueuePool exhaustion under concurrent requests.
+            try:
+                session.commit()
+            except Exception as exc:
+                session.rollback()
+                logger.warning("Could not commit pre-LLM transaction for session %s: %s", sid, exc)
 
             try:
                 gen_cfg = self._generation_config()

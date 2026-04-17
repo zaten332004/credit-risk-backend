@@ -571,7 +571,10 @@ async def send_message(
         try:
             update_chat_session_initial_context(db, session_id, current_user.id, uploaded_file_context)
             db.flush()
+            # Release connection early before long-running LLM call.
+            db.commit()
         except Exception as e:
+            db.rollback()
             logger.warning("Could not persist uploaded file context for session %s: %s", session_id, str(e))
 
     try:
